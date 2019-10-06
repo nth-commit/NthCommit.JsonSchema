@@ -86,3 +86,7 @@ module Json =
     let objectOfOneProperty (property : Gen<JProperty>) : Gen<JObject> =
         property
         |> Gen.map (fun p -> JObject([p]))
+
+    let serialize token =
+        token
+        |> Gen.map JsonConvert.SerializeObject

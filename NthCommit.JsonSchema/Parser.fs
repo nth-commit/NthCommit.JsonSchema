@@ -27,15 +27,16 @@ module private Result =
 [<AutoOpen>]
 module Parser =
 
-    type SchemaViolationTrivia = string
+    type Path = string
+
+    type Trivia = string
 
     [<RequireQualifiedAccess>]
     type ParserError =
         | InvalidJson
-        | InvalidPropertyName of JProperty
-        | InvalidPropertyType of JProperty
-        | InvalidPropertyValue of JProperty
-        | SchemaViolation of JToken * SchemaViolationTrivia
+        | InvalidPropertyName of (Path * Trivia)
+        | InvalidPropertyType of Path // TODO: Augment with expected type(s)
+        | InvalidPropertyValue of Path
         | Unhandled
 
     module JsonTypeParser =
@@ -50,21 +51,24 @@ module Parser =
             | Array
             | Unset
 
-        let private matchJsonType p = function
-            | "null" -> JsonType.Null |> Ok
-            | "string" -> JsonType.String |> Ok
-            | "number" -> JsonType.Number |> Ok
-            | "boolean" -> JsonType.Boolean |> Ok
-            | "array" -> JsonType.Array |> Ok
-            | "object" -> JsonType.Object |> Ok
-            | _ -> ParserError.InvalidPropertyValue p |> Error
+        let private matchJsonType = function
+            | "null" -> JsonType.Null |> Some
+            | "string" -> JsonType.String |> Some
+            | "number" -> JsonType.Number |> Some
+            | "boolean" -> JsonType.Boolean |> Some
+            | "array" -> JsonType.Array |> Some
+            | "object" -> JsonType.Object |> Some
+            | _ -> None
 
         let parse (propertyOpt : JProperty option) : Result<JsonType, ParserError> =
             match propertyOpt with
             | Some property ->
                 match matchJToken property.Value with
-                | JsonString s -> matchJsonType property s
-                | _ -> ParserError.InvalidPropertyType property |> Error
+                | JsonString s ->
+                    match matchJsonType s with
+                    | Some jsonType -> Ok jsonType
+                    | None -> ParserError.InvalidPropertyValue property.Path |> Error
+                | _ -> ParserError.InvalidPropertyType property.Path |> Error
             | None _ -> JsonType.Unset |> Ok
 
     module PropertiesParser =
@@ -78,10 +82,10 @@ module Parser =
                 match jsonType with
                 | JsonTypeParser.JsonType.Object _ ->
                     match matchJToken property.Value with
-                    | _ -> ParserError.InvalidPropertyType property |> Error
+                    | _ -> ParserError.InvalidPropertyType property.Path |> Error
                 | _ ->
                     let trivia = "Property 'properties' is only valid when 'type' is 'object'"
-                    ParserError.SchemaViolation (property, trivia) |> Error
+                    ParserError.InvalidPropertyName (property.Path, trivia) |> Error
             | None -> Properties.Unset |> Ok
 
     let private keyPropertiesByName (properties : JProperty list) : Map<string, JProperty> =
@@ -96,7 +100,7 @@ module Parser =
 
     let private parseSchemaProperties (properties : JProperty list) : Result<JsonSchema, ParserError> =
         match tryFindPropertyWithInvalidName properties with
-        | Some property -> ParserError.InvalidPropertyName property |> Error 
+        | Some property -> ParserError.InvalidPropertyName (property.Path, "") |> Error 
         | None ->
             let propertiesByName = keyPropertiesByName properties
             propertiesByName |> Map.tryFind "type" |> JsonTypeParser.parse
