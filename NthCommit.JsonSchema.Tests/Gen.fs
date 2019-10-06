@@ -71,6 +71,12 @@ module Json =
         token
         |> Gen.filter (fun t -> t.Type <> kind)
 
+    let stringValueNotOf strings =
+        tokenOf JTokenType.String
+        |> Gen.filter (fun t ->
+            List.contains (t.Value<string>()) strings
+            |> not)
+
     let propertyWithValue (name : Gen<string>) (value : Gen<JToken>) : Gen<JProperty> =
         Gen.zip name value
         |> Gen.map (fun (n, v) -> JProperty(n, v))

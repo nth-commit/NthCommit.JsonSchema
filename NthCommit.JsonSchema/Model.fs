@@ -2,17 +2,17 @@
 
 type JsonObjectSchema = {
     Properties : (string * JsonSchema) list
-    RequiredProperies : string list
+    Required : string list
     AdditionalProperties : bool }
 
 and JsonArraySchema = {
     Items : JsonSchema }
 
-and JsonPrimitiveSchema =
-    | JsonPrimitiveString
-
 and JsonSchema =
+    | Null
+    | String
+    | Number
+    | Boolean
     | Object of JsonObjectSchema
     | Array of JsonSchema
-    | Primitive of JsonPrimitiveSchema
     | Unvalidated
