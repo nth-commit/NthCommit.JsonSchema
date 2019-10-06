@@ -89,9 +89,46 @@ module JsonType =
 module Properties =
 
     [<Fact>]
-    let ``parses rudimentary "properties" schema`` () =
-        let schema = @"{ ""type"": ""object"", ""properties"": {} }"
-        JsonSchema.Object { Properties = []; Required = []; AdditionalProperties = true } |> Ok =! parse schema
+    let ``parses trivial nested schema`` () =
+        let schema = @"
+            {
+                ""type"": ""object"",
+                ""properties"": {}
+            }"
+        let expected = JsonSchema.Object { Properties = []; Required = []; AdditionalProperties = true } |> Ok
+        expected =! parse schema
+
+    [<Fact>]
+    let ``parses second trivial nested schema`` () =
+        Property.check <| property {
+            let! propertyName = Gen.Strings.camelCaseWord
+            let! propertyType = Gen.item JsonType.validJsonTypes
+            let schema = @"
+                {
+                    ""type"": ""object"",
+                    ""properties"": {
+                        """ + propertyName + @""": {
+                            ""type"": """ + propertyType + @"""
+                        }
+                    }
+                }"
+            let expectedType =
+                match propertyType with
+                | "null" -> JsonSchema.Null
+                | "string" -> JsonSchema.String
+                | "number" -> JsonSchema.Number
+                | "boolean" -> JsonSchema.Boolean
+                | "array" -> JsonSchema.Array JsonSchema.Unvalidated
+                | "object" -> JsonSchema.Object { Properties = []; Required = []; AdditionalProperties = true; }
+                | _ -> raise (Exception (sprintf "Type '%s' is unhandled by test" propertyType))
+            let expected =
+                JsonSchema.Object {
+                    Properties = [
+                        (propertyName, expectedType)]
+                    Required = []
+                    AdditionalProperties = true }
+                |> Ok
+            expected =! parse schema }
 
     [<Fact>]
     let ``reports "properties" is invalid if json type is not "object"`` () =

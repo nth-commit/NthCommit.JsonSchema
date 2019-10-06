@@ -35,6 +35,14 @@ module private Result =
                 | Ok nextState -> fold folder nextState xs
                 | Error e -> Error e
 
+    let rec concat (list : List<Result<'T, 'TError>>) : Result<List<'T>, 'TError> =
+        match list with
+        | [] -> Ok []
+        | x :: xs ->
+            match x with
+            | Ok x' -> concat xs |> Result.map (fun xs' -> x' :: xs')
+            | Error e -> e |> Error
+
 [<AutoOpen>]
 module Parser =
 
@@ -113,11 +121,11 @@ module Parser =
 
         [<RequireQualifiedAccess>]
         type Properties =
-            | Object of (string * JProperty list) list
+            | SubSchemas of (string * JProperty list) list
             | Unset
 
         let private parsePropertiesItem (property : JProperty) : Result<string * JProperty list, ParserError> =
-            match matchJToken property with
+            match matchJToken property.Value with
             | JsonToken.JsonObject properties -> Ok (property.Name, properties)
             | _ -> Errors.signalOnePropertyType property.Path "object"
 
@@ -126,7 +134,7 @@ module Parser =
                 parsePropertiesItem curr
                 |> Result.map (fun property -> property :: acc) 
             Result.fold folder [] properties
-            |> Result.map (Properties.Object)
+            |> Result.map Properties.SubSchemas
 
         let private parsePropertiesValue path value =
             match matchJToken value with
@@ -151,22 +159,32 @@ module Parser =
         |> Seq.map (fun n -> Map.find n propertiesByName)
         |> Seq.tryHead
 
-    let private parseSchemaProperties (properties : JProperty list) : Result<JsonSchema, ParserError> =
+    let rec private parseSchemaProperties (properties : JProperty list) : Result<JsonSchema, ParserError> =
         match tryFindPropertyWithInvalidName properties with
         | Some property -> Errors.signalPropertyName property.Path ""
         | None ->
             let propertiesByName = keyPropertiesByName properties
             propertiesByName |> Map.tryFind "type" |> JsonTypeParser.parse
             |> Result.append (propertiesByName |> Map.tryFind "properties" |> PropertiesParser.parse)
-            |> Result.map (fun (jsonType, _) ->
+            |> Result.bind (fun (jsonType, schemaProperties) ->
                 match jsonType with
-                | JsonTypeParser.JsonType.Null -> JsonSchema.Null
-                | JsonTypeParser.JsonType.String -> JsonSchema.String
-                | JsonTypeParser.JsonType.Number -> JsonSchema.Number
-                | JsonTypeParser.JsonType.Boolean -> JsonSchema.Boolean
-                | JsonTypeParser.JsonType.Array -> JsonSchema.Array (JsonSchema.Unvalidated)
-                | JsonTypeParser.JsonType.Object -> JsonSchema.Object { Properties = []; Required = []; AdditionalProperties = true }
-                | JsonTypeParser.JsonType.Unset -> JsonSchema.Unvalidated)
+                | JsonTypeParser.JsonType.Null -> JsonSchema.Null |> Ok
+                | JsonTypeParser.JsonType.String -> JsonSchema.String |> Ok
+                | JsonTypeParser.JsonType.Number -> JsonSchema.Number |> Ok
+                | JsonTypeParser.JsonType.Boolean -> JsonSchema.Boolean |> Ok
+                | JsonTypeParser.JsonType.Array -> JsonSchema.Array (JsonSchema.Unvalidated) |> Ok
+                | JsonTypeParser.JsonType.Object ->
+                    match schemaProperties with
+                    | PropertiesParser.Properties.Unset ->
+                        JsonSchema.Object { Properties = []; Required = []; AdditionalProperties = true } |> Ok
+                    | PropertiesParser.Properties.SubSchemas untraversedSubSchemas ->
+                        untraversedSubSchemas
+                        |> List.map (snd >> parseSchemaProperties)
+                        |> Result.concat
+                        |> Result.map (fun subSchemas ->
+                            let properties = subSchemas |> List.zip (untraversedSubSchemas |> List.map fst)
+                            JsonSchema.Object { Properties = properties; Required = []; AdditionalProperties = true })
+                | JsonTypeParser.JsonType.Unset -> JsonSchema.Unvalidated |> Ok)
 
     let private parseSchemaToken (token : JsonToken) : Result<JsonSchema, ParserError> =
         match token with
