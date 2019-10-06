@@ -12,19 +12,19 @@ let makeParserError (parserError : ParserError) : Result<JsonSchema, ParserError
     Error parserError
 
 let invalidJson =
-    ParserError.InvalidJson
+    ParserError.Json
     |> makeParserError
 
-let makeInvalidPropertyType path =
-    ParserError.InvalidPropertyType path
+let makeInvalidPropertyType path acceptedTypes =
+    ParserError.PropertyType { Path = path; AcceptedTypes = acceptedTypes }
     |> makeParserError
 
 let makeInvalidPropertyName path trivia =
-    ParserError.InvalidPropertyName (path, trivia)
+    ParserError.PropertyName { Path = path; Trivia = trivia }
     |> makeParserError
 
 let makeInvalidPropertyValue path =
-    ParserError.InvalidPropertyValue path
+    ParserError.PropertyValue path
     |> makeParserError
 
 [<Fact>]
@@ -53,25 +53,7 @@ module JsonType =
     let validJsonTypes = ["null"; "string"; "number"; "boolean"; "array"; "object"]
 
     [<Fact>]
-    let ``reports invalid type for "type"`` () =
-        Property.check <| property {
-            let! propertyValue =
-                Gen.Json.tokenNotOf JTokenType.String
-                |> Gen.Json.serialize
-            let schema = sprintf @"{ ""type"": %s }" propertyValue
-            makeInvalidPropertyType "type" =! parse schema }
-    
-    [<Fact>]
-    let ``reports invalid value for "type"`` () =
-        Property.check <| property {
-            let! propertyValue =
-                Gen.Json.stringValueNotOf validJsonTypes
-                |> Gen.Json.serialize
-            let schema = sprintf @"{ ""type"": %s }" propertyValue
-            makeInvalidPropertyValue "type" =! parse schema }
-
-    [<Fact>]
-    let ``parses rudimentary typed schema`` () =
+    let ``parses rudimentary "type" schema`` () =
         Property.check <| property {
             let! jsonType = Gen.item validJsonTypes
             let expected : Result<JsonSchema, ParserError> =
@@ -86,7 +68,30 @@ module JsonType =
                 |> Ok
             expected =! (parse (sprintf @"{ ""type"": ""%s"" }" jsonType)) }
 
+    [<Fact>]
+    let ``reports invalid type for "type"`` () =
+        Property.check <| property {
+            let! propertyValue =
+                Gen.Json.tokenNotOf JTokenType.String
+                |> Gen.Json.serialize
+            let schema = sprintf @"{ ""type"": %s }" propertyValue
+            makeInvalidPropertyType "type" ["string"] =! parse schema }
+    
+    [<Fact>]
+    let ``reports invalid value for "type"`` () =
+        Property.check <| property {
+            let! propertyValue =
+                Gen.Json.stringValueNotOf validJsonTypes
+                |> Gen.Json.serialize
+            let schema = sprintf @"{ ""type"": %s }" propertyValue
+            makeInvalidPropertyValue "type" =! parse schema }
+
 module Properties =
+
+    [<Fact>]
+    let ``parses rudimentary "properties" schema`` () =
+        let schema = @"{ ""type"": ""object"", ""properties"": {} }"
+        JsonSchema.Object { Properties = []; Required = []; AdditionalProperties = true } |> Ok =! parse schema
 
     [<Fact>]
     let ``reports "properties" is invalid if json type is not "object"`` () =
@@ -112,7 +117,7 @@ module Properties =
                 Gen.Json.tokenNotOf JTokenType.Object
                 |> Gen.Json.serialize
             let schema = sprintf @"{ ""type"": ""object"", ""properties"": %s }" propertiesValue
-            makeInvalidPropertyType "properties" =! parse schema }
+            makeInvalidPropertyType "properties" ["object"] =! parse schema }
 
     [<Fact>]
     let ``reports invalid value for "properties" if not an object of objects`` () =
@@ -128,4 +133,4 @@ module Properties =
                     propertiesPropertyName
                     propertiesPropertyValue
             let expectedPath = sprintf "properties.%s" propertiesPropertyName
-            makeInvalidPropertyValue expectedPath =! parse schema }
+            makeInvalidPropertyType expectedPath ["object"] =! parse schema }

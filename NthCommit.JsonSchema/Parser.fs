@@ -24,20 +24,54 @@ module private Result =
     let append (f : 'a -> Result<'b, 'TError>) (x : Result<'a, 'TError>) : Result<('a * 'b), 'TError> =
         x |> Result.bind (fun a -> f a |> Result.map (fun b -> (a, b)))
 
+    let rec fold
+        (folder : 'State -> 'T -> Result<'State, 'TError>)
+        (state : 'State)
+        (list : List<'T>) =
+            match list with
+            | [] -> Ok state
+            | x :: xs ->
+                match folder state x with
+                | Ok nextState -> fold folder nextState xs
+                | Error e -> Error e
+
 [<AutoOpen>]
 module Parser =
 
-    type Path = string
+    type InvalidPropertyNameData = {
+        Path : string
+        Trivia : string }
 
-    type Trivia = string
+    type InvalidPropertyTypeData = {
+        Path : string
+        AcceptedTypes : string list }
 
     [<RequireQualifiedAccess>]
     type ParserError =
-        | InvalidJson
-        | InvalidPropertyName of (Path * Trivia)
-        | InvalidPropertyType of Path // TODO: Augment with expected type(s)
-        | InvalidPropertyValue of Path
-        | Unhandled
+        | Json
+        | PropertyName of InvalidPropertyNameData
+        | PropertyType of InvalidPropertyTypeData
+        | PropertyValue of string
+
+    module Errors =
+
+        let signalPropertyName path trivia =
+            { Path = path; Trivia = trivia }
+            |> ParserError.PropertyName
+            |> Error
+
+        let signalPropertyType path acceptedTypes =
+            { Path = path; AcceptedTypes = acceptedTypes }
+            |> ParserError.PropertyType
+            |> Error
+
+        let signalOnePropertyType path acceptedType =
+            signalPropertyType path [acceptedType]
+
+        let signalPropertyValue path =
+            path
+            |> ParserError.PropertyValue
+            |> Error
 
     module JsonTypeParser =
 
@@ -67,25 +101,44 @@ module Parser =
                 | JsonString s ->
                     match matchJsonType s with
                     | Some jsonType -> Ok jsonType
-                    | None -> ParserError.InvalidPropertyValue property.Path |> Error
-                | _ -> ParserError.InvalidPropertyType property.Path |> Error
+                    | None -> Errors.signalPropertyValue property.Path
+                | _ -> Errors.signalOnePropertyType property.Path "string"
             | None _ -> JsonType.Unset |> Ok
 
     module PropertiesParser =
 
+        module private Errors =
+            let signalPropertiesMisplaced path =
+                Errors.signalPropertyName path "Property 'properties' is only valid when 'type' is 'object'"
+
+        [<RequireQualifiedAccess>]
         type Properties =
+            | Object of (string * JProperty list) list
             | Unset
 
-        let parse (propertyOpt : JProperty option) (jsonType : JsonTypeParser.JsonType) : Result<Properties, ParserError> =
+        let private parsePropertiesItem (property : JProperty) : Result<string * JProperty list, ParserError> =
+            match matchJToken property with
+            | JsonToken.JsonObject properties -> Ok (property.Name, properties)
+            | _ -> Errors.signalOnePropertyType property.Path "object"
+
+        let private parsePropertiesList (properties : JProperty list) : Result<Properties, ParserError> =
+            let folder acc curr =
+                parsePropertiesItem curr
+                |> Result.map (fun property -> property :: acc) 
+            Result.fold folder [] properties
+            |> Result.map (Properties.Object)
+
+        let private parsePropertiesValue path value =
+            match matchJToken value with
+            | JsonToken.JsonObject properties -> parsePropertiesList properties
+            | _ -> Errors.signalOnePropertyType path "object"
+
+        let parse (propertyOpt : JProperty option) (currentJsonType : JsonTypeParser.JsonType) : Result<Properties, ParserError> =
             match propertyOpt with
             | Some property ->
-                match jsonType with
-                | JsonTypeParser.JsonType.Object _ ->
-                    match matchJToken property.Value with
-                    | _ -> ParserError.InvalidPropertyType property.Path |> Error
-                | _ ->
-                    let trivia = "Property 'properties' is only valid when 'type' is 'object'"
-                    ParserError.InvalidPropertyName (property.Path, trivia) |> Error
+                match currentJsonType with
+                | JsonTypeParser.JsonType.Object -> parsePropertiesValue property.Path property.Value
+                | _ -> Errors.signalPropertiesMisplaced property.Path
             | None -> Properties.Unset |> Ok
 
     let private keyPropertiesByName (properties : JProperty list) : Map<string, JProperty> =
@@ -100,7 +153,7 @@ module Parser =
 
     let private parseSchemaProperties (properties : JProperty list) : Result<JsonSchema, ParserError> =
         match tryFindPropertyWithInvalidName properties with
-        | Some property -> ParserError.InvalidPropertyName (property.Path, "") |> Error 
+        | Some property -> Errors.signalPropertyName property.Path ""
         | None ->
             let propertiesByName = keyPropertiesByName properties
             propertiesByName |> Map.tryFind "type" |> JsonTypeParser.parse
@@ -126,7 +179,7 @@ module Parser =
 
     let private deserialize schema =
         tryDeserialize schema
-        |> Result.mapError (fun _ -> ParserError.InvalidJson)
+        |> Result.mapError (fun _ -> ParserError.Json)
 
     let parse (schema : string) : Result<JsonSchema, ParserError> =
         deserialize schema
