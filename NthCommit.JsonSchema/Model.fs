@@ -1,5 +1,7 @@
 ﻿namespace NthCommit.JsonSchema
 
+open System.Text.RegularExpressions
+
 type JsonObjectSchema = {
     Properties : (string * JsonSchema) list
     Required : string list

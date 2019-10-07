@@ -11,6 +11,7 @@
     <Compile Include="Parsing\SchemaTypeParser.fs" />
     <Compile Include="Parsing\SchemaPropertiesParser.fs" />
     <Compile Include="Parsing\Parser.fs" />
+    <Compile Include="ParsingV2\ParserV2.fs" />
   </ItemGroup>
 
   <ItemGroup>

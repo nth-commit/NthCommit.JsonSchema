@@ -28,7 +28,7 @@ module SchemaTypeParser =
         match propertyOpt with
         | Some property ->
             match matchJToken property.Value with
-            | JsonString s ->
+            | MatchedJValueAsString s ->
                 match matchSchemaType s with
                 | Some schemaType -> Ok schemaType
                 | None -> Errors.signalPropertyValue property.Path

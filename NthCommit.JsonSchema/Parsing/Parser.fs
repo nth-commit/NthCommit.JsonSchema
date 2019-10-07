@@ -73,9 +73,9 @@ module Parser =
                             JsonSchema.Object { Properties = properties; Required = []; AdditionalProperties = true })
                 | SchemaType.Unset -> JsonSchema.Unvalidated |> Ok)
 
-    let private parseSchemaToken (token : JsonToken) : Result<JsonSchema, ParserError> =
+    let private parseSchemaToken (token : MatchedJToken) : Result<JsonSchema, ParserError> =
         match token with
-        | JsonObject properties -> parseSchema properties
+        | MatchedJObject properties -> parseSchema properties
         | _ -> raise (Exception "")
 
     let private parseSchemaElement schemaToken : Result<JsonSchema, ParserError> =

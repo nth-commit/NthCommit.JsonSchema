@@ -27,7 +27,7 @@ module SchemaPropertiesParser =
 
     let private parseSubSchema (property : JProperty) : Result<string * JProperty list, ParserError> =
         match matchJToken property.Value with
-        | JsonToken.JsonObject properties -> Ok (property.Name, properties)
+        | MatchedJToken.MatchedJObject properties -> Ok (property.Name, properties)
         | _ -> Errors.signalOnePropertyType property.Path "object"
 
     let private parseSubSchemas (properties : JProperty list) : Result<SchemaProperties, ParserError> =
@@ -39,7 +39,7 @@ module SchemaPropertiesParser =
 
     let private parseSchemaProperties path value =
         match matchJToken value with
-        | JsonToken.JsonObject properties -> parseSubSchemas properties
+        | MatchedJToken.MatchedJObject properties -> parseSubSchemas properties
         | _ -> Errors.signalOnePropertyType path "object"
 
     let parse (propertyOpt : JProperty option) (currentSchemaType : SchemaType) : Result<SchemaProperties, ParserError> =

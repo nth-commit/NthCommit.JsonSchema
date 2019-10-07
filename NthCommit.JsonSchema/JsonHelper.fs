@@ -10,25 +10,21 @@ module JsonHelper =
         try JsonConvert.DeserializeObject<'a>(json) |> Ok
         with | :? JsonException -> Error ()
 
-    type JsonToken =
-        | JsonObject of JProperty list
-        | JsonString of string
-        | JsonProperty of string * JToken
+    type MatchedJToken =
+        | MatchedJObject of JProperty list
+        | MatchedJValueAsString of string
         | Unhandled
 
     let matchJToken (jt : JToken) =
         match jt.Type with
         | JTokenType.Object ->
-            (jt :?> JObject).Properties() |> Seq.toList |> JsonObject
+            (jt :?> JObject).Properties() |> Seq.toList |> MatchedJObject
         | JTokenType.String ->
-            JsonString (jt.Value<string>())
-        | JTokenType.Property ->
-            let jPropery = jt :?> JProperty
-            JsonProperty (jPropery.Name, jPropery.Value)
+            MatchedJValueAsString (jt.Value<string>())
         | _ ->
             Unhandled
 
     let unmatchJToken = function
-        | JsonObject _ -> JTokenType.Object
-        | JsonString _ -> JTokenType.String
+        | MatchedJObject _ -> JTokenType.Object
+        | MatchedJValueAsString _ -> JTokenType.String
         | _ -> raise (Exception "Unrecognized token")

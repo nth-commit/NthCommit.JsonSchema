@@ -15,7 +15,7 @@ module private Result =
 
 module Strings =
 
-    module String =
+    module private String =
 
         let capitalize (str : string) =
             match (str |> Seq.toList) with
@@ -37,6 +37,8 @@ module Strings =
             | x :: xs ->
                 x :: (xs |> List.map String.capitalize)
                 |> List.reduce (+))
+
+    let defaultString = camelCaseWord
 
     let whitespace = gen {
         let whitespaceChar = [' '] |> Gen.item
@@ -90,3 +92,7 @@ module Json =
     let serialize token =
         token
         |> Gen.map JsonConvert.SerializeObject
+
+let notIn source generator =
+    generator
+    |> Gen.filter (fun x -> List.contains x source |> not)
