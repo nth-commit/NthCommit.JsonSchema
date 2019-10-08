@@ -32,8 +32,8 @@ let trivialObjectSchema =
 
 module JToken =
 
-    let primitive (jTokenType : JTokenType) =
-        match jTokenType with
+    let primitive (jToken : JToken) =
+        match jToken.Type with
         | JTokenType.Object     -> JsonPrimitive.Object
         | JTokenType.String     -> JsonPrimitive.String
         | JTokenType.Boolean    -> JsonPrimitive.Boolean
@@ -65,6 +65,64 @@ let ``parses schema of given "type"`` () =
         | x         -> <@ x <> x @> // We must have an unhandled primitive
         |> test }
 
+let makeParserError (parserError : ParserError) : Result<JsonSchema, ParserError> =
+    Error parserError
+
+let makeSchemaError schemaError =
+    schemaError
+    |> ParserError.Schema
+    |> makeParserError
+
+let makeSchemaTypeError path expectedTypes actualType =
+    { Path = path; ExpectedTypes = Set(expectedTypes); ActualType = actualType }
+    |> SchemaError.Type
+    |> makeSchemaError
+
+let expectSchemaTypeError path expectedTypes actualType schema =
+    //let tokenType = actualToken.Type
+    test <@ makeSchemaTypeError path expectedTypes actualType = parse schema @>
+
+module Validation =
+
+
+    let makeSchemaValueError path value =
+        { Path = path; Value = value }
+        |> SchemaError.Value
+        |> makeSchemaError
+
+    let invalidJson =
+        ParserError.Json
+        |> makeParserError
+
+    [<Fact>]
+    let ``reports invalid json`` () =
+        Property.check <| property {
+            let! schema = Gen.Json.invalid
+            invalidJson =! parse schema }
+
+    [<Fact>]
+    let ``reports schema error when schema is not a json object`` () =
+        Property.check <| property {
+            let! schemaToken = Gen.Json.tokenNotOf JTokenType.Object
+            let schema = JToken.serialize schemaToken
+            expectSchemaTypeError "" [JsonPrimitive.Object] (JToken.primitive schemaToken) schema }
+
+    [<Fact>]
+    let ``reports schema type error when type is not a string`` () =
+        Property.check <| property {
+            let! typeToken = Gen.Json.tokenNotOf JTokenType.String
+            let schema = sprintf @"{ ""type"": %s }" (JToken.serialize typeToken)
+            expectSchemaTypeError "type" [JsonPrimitive.String] (JToken.primitive typeToken) schema }
+
+    [<Fact>]
+    let ``reports schema value error when type is not the name of a json primitive`` () =
+        Property.check <| property {
+            let! typeValue =
+                Gen.Strings.defaultString
+                |> Gen.notIn primitiveNames
+            let schema = sprintf @"{ ""type"": ""%s"" }" typeValue
+            makeSchemaValueError "type" typeValue =! parse schema }
+
 module Object = 
 
     [<Fact>]
@@ -78,71 +136,30 @@ module Object =
                 |> Gen.Json.maybeAdditive
             test <@ Ok <| trivialObjectSchema = parse schema @> }
 
-module Validation =
+    module Validation =
 
-    let makeParserError (parserError : ParserError) : Result<JsonSchema, ParserError> =
-        Error parserError
-    
-    let makeSchemaError schemaError =
-        schemaError
-        |> ParserError.Schema
-        |> makeParserError
-    
-    let makeSchemaTypeError path expectedTypes actualType =
-        { Path = path; ExpectedTypes = Set(expectedTypes); ActualType = actualType }
-        |> SchemaError.Type
-        |> makeSchemaError
-    
-    let makeSchemaValueError path value =
-        { Path = path; Value = value }
-        |> SchemaError.Value
-        |> makeSchemaError
-    
-    let invalidJson =
-        ParserError.Json
-        |> makeParserError
+        [<Fact>]
+        let ``reports schema type error when properties is not a json object`` () =
+            Property.check <| property {
+                let! propertiesToken = Gen.Json.tokenNotOf JTokenType.Object
+                let schema = sprintf @"{ ""type"": ""object"", ""properties"": %s }" (JToken.serialize propertiesToken)
+                let expectedError = makeSchemaTypeError "properties" [JsonPrimitive.Object] (JToken.primitive propertiesToken)
+                test <@ expectedError = parse schema @> }
 
-    let expectSchemaTypeError path expectedTypes (actualToken : JToken) schema =
-        let tokenType = actualToken.Type
-        test <@ makeSchemaTypeError path expectedTypes (tokenType |> JToken.primitive) = parse schema @>
+        [<Fact>]
+        let ``reports schema type error when properties/foo is not a json object`` () =
+            Property.check <| property {
+                let schema = @"{ ""type"": ""object"", ""properties"": { ""foo"": ""bar"" }"
+                let expectedError = makeSchemaTypeError "properties.foo" [JsonPrimitive.Object] JsonPrimitive.String
+                test <@ expectedError = parse schema @> }
 
-    [<Fact>]
-    let ``reports invalid json`` () =
-        Property.check <| property {
-            let! schema = Gen.Json.invalid
-            invalidJson =! parse schema }
+        [<Fact>]
+        let ``reports schema type error when properties/foo/type is not a string`` () =
+            Property.check <| property {
+                let schema = @"{ ""type"": ""object"", ""properties"": { ""foo"": { ""type"": true } }"
+                let expectedError = makeSchemaTypeError "properties.foo.type" [JsonPrimitive.String] JsonPrimitive.Boolean
+                test <@ expectedError = parse schema @> }
 
-    [<Fact>]
-    let ``reports schema error when schema is not a json object`` () =
-        Property.check <| property {
-            let! schemaToken = Gen.Json.tokenNotOf JTokenType.Object
-            let schema = JToken.serialize schemaToken
-            expectSchemaTypeError "" [JsonPrimitive.Object] schemaToken schema }
-
-    [<Fact>]
-    let ``reports schema type error when type is not a string`` () =
-        Property.check <| property {
-            let! typeToken = Gen.Json.tokenNotOf JTokenType.String
-            let schema = sprintf @"{ ""type"": %s }" (JToken.serialize typeToken)
-            expectSchemaTypeError "type" [JsonPrimitive.String] typeToken schema }
-
-    [<Fact>]
-    let ``reports schema value error when type is not the name of a json primitive`` () =
-        Property.check <| property {
-            let! typeValue =
-                Gen.Strings.defaultString
-                |> Gen.notIn primitiveNames
-            let schema = sprintf @"{ ""type"": ""%s"" }" typeValue
-            makeSchemaValueError "type" typeValue =! parse schema }
-
-    [<Fact>]
-    let ``reports schema type error when properties is not an object`` () =
-        Property.check <| property {
-            let! propertiesToken = Gen.Json.tokenNotOf JTokenType.Object
-            let schema = sprintf @"{ ""type"": ""object"", ""properties"": %s }" (JToken.serialize propertiesToken)
-            expectSchemaTypeError "properties" [JsonPrimitive.Object] propertiesToken schema }
-
-// TODO: Property members validation e.g. has any member that is not an object
 // TODO: Report existing members that are not in the set of what we capture, as the standard is not fully supported so
 //       should flag up these. Will need to add a strict mode (false)
 // TODO: Nested properties validation

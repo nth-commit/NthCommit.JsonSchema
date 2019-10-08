@@ -95,11 +95,16 @@ module Json =
 
     let maybeAdditive (json : string) = gen {
         let jObject = JsonConvert.DeserializeObject<JObject> json
-        let! properties =
+        let! newProperties =
             property Strings.camelCaseWord
-            |> Gen.list (Range.exponential 0 100)
-        jObject.Add(properties)
-        return JsonConvert.SerializeObject(jObject) }
+            |> Gen.list (Range.exponential 0 50)
+        let oldProperties = jObject.Properties() |> Seq.toList
+        let mergedProperties =
+            oldProperties @ newProperties
+            |> List.groupBy (fun p -> p.Name)
+            |> List.map snd
+            |> List.concat
+        return JsonConvert.SerializeObject(JObject (mergedProperties)) }
 
 let notIn source generator =
     generator

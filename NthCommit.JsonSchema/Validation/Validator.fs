@@ -7,17 +7,10 @@ open NthCommit.JsonSchema.JsonHelper
 module JTokenType =
 
     let toPrimitive = function
-        | JTokenType.String -> JsonPrimitive.String
-        | JTokenType.Boolean -> JsonPrimitive.Boolean
-        | JTokenType.Object -> JsonPrimitive.Object
-        | x -> raise (Exception("Unhandled JTokenType: " + x.ToString()))
-
-module private Result =
-
-    let rec allOk (list : List<Result<_, 'TError>>) : Result<unit, 'TError> =
-        match list with
-        | []        -> Ok ()
-        | x :: xs   -> x |> Result.bind (fun _ -> allOk xs)
+        | JTokenType.String     -> JsonPrimitive.String
+        | JTokenType.Boolean    -> JsonPrimitive.Boolean
+        | JTokenType.Object     -> JsonPrimitive.Object
+        | x                     -> raise (Exception("Unhandled JTokenType: " + x.ToString()))
 
 module Validator =
 
@@ -27,10 +20,6 @@ module Validator =
             list
             |> List.map (fun x -> (keyProjection x, x))
             |> Map
-
-        let mapFst f list =
-            list
-            |> List.map (fun (x, y) -> (f x, y))
 
     type JsonPathComponent =
         | PropertyAccess of string
@@ -48,8 +37,8 @@ module Validator =
         member this.Render () =
             let (JsonPath components) = this
             match components with
-            | [] -> ""
-            | _ ->
+            | []    -> ""
+            | _     ->
                 components
                 |> List.map (fun c ->
                     match c with
@@ -85,60 +74,86 @@ module Validator =
         | EndValidatingProperty
         | ValidatedString of string
 
-    let private validateInstanceInValues (instance : 'a) (values : 'a list) (ctx : JsonContext) =
-        if values |> List.contains instance
-        then Ok ()
-        else Error <| SchemaError.Value {
+    let private validateInstanceInValues (instance : 'a) (values : 'a list) (ctx : JsonContext) = seq {
+        if values |> List.contains instance |> not
+        then yield SchemaError.Value {
             Path = ctx.CurrentPath.Render()
-            Value = instance.ToString() }
+            Value = instance.ToString() } }
 
-    let private validateString (schema : JsonStringSchema) (instance : string) (ctx : JsonContext) : Result<unit, SchemaError> =
+    let private validateString (schema : JsonStringSchema) (instance : string) (ctx : JsonContext) : seq<SchemaError> =
         match schema with
-        | JsonStringSchema.Unvalidated  -> Ok ()
+        | JsonStringSchema.Unvalidated  -> Seq.empty
         | JsonStringSchema.Enum values  -> validateInstanceInValues instance values ctx
         | JsonStringSchema.Const _      -> raise (Exception ("Unhandled: JsonStringSchema.Const"))
 
-    let rec private validateProperty (schema : JsonPropertySchema) (instance : JProperty) (ctx : JsonContext) : Result<unit, SchemaError> =
-        let schemaPrimitive = schema.Value.Primitive
+    let private evaluateReference (JsonReference reference) (ctx : JsonContext) : JsonSchema =
+        match reference with
+        | "#"   -> ctx.SchemaRoot
+        | x     -> raise (NotImplementedException ("Reference is not supported: " + x))
+
+    let private getEffectiveSchema (propertySchema : JsonPropertySchema) (ctx : JsonContext) : JsonSchema =
+        match propertySchema with
+        | Standard (_, schema)  -> schema
+        | Reference reference   -> evaluateReference reference ctx
+
+    let rec private validatePropertyAgainstSchema (schema : JsonSchema) (instance : JProperty) (ctx : JsonContext) = seq {
+        let schemaPrimitive = schema.Primitive
         let instancePrimitive = instance.Value.Type |> JTokenType.toPrimitive
         if schemaPrimitive = instancePrimitive
-        then
-            match schema with
-            | Standard (_, valueSchema) -> tokenMatchesSchema valueSchema instance.Value ctx
-            | _                         -> raise (Exception ())
-        else Error <| SchemaError.Type {
+        then yield! tokenMatchesSchema schema instance.Value ctx
+        else yield SchemaError.Type {
             Path = instance.Path
             ExpectedTypes = Set([schemaPrimitive])
-            ActualType = instancePrimitive }
+            ActualType = instancePrimitive } }
 
-    and private objectMatchesSchema (schema : JsonObjectSchema) (instance : JProperty list) (ctx : JsonContext) : Result<unit, SchemaError> =
+    and private validateProperty (schemas : JsonSchema list) (instance : JProperty) (ctx : JsonContext) : seq<SchemaError> =
+        schemas
+        |> List.map (fun s -> validatePropertyAgainstSchema s instance ctx)
+        |> Seq.concat
+
+    and private objectMatchesSchema (schema : JsonObjectSchema) (instance : JProperty list) (ctx : JsonContext) : seq<SchemaError> =
         let schemaPropertiesByName =
             schema.Properties
             |> List.toMap (fun p -> p.Name)
-        instance
-        |> List.map (fun p -> (schemaPropertiesByName |> Map.tryFind (p.Name), p))
-        |> List.filter (fst >> Option.isSome)
-        |> List.mapFst Option.get
-        |> List.map (fun (schemaProperty, instanceProperty) ->
-            validateProperty schemaProperty instanceProperty (ctx.PushProperty schemaProperty.Name))
-        |> Result.allOk
 
-    and private tokenMatchesSchema (schema : JsonSchema) (instance : JToken) (ctx : JsonContext) : Result<unit, SchemaError> =
+        let getSpecificPropertySchema (instanceProperty : JProperty) : JsonSchema option =
+            schemaPropertiesByName
+            |> Map.tryFind (instanceProperty.Name)
+            |> Option.map (fun propertySchema -> getEffectiveSchema propertySchema ctx)
+
+        let getPatternPropertySchemas (instanceProperty : JProperty) : JsonSchema list =
+            schema.PatternProperties
+            |> List.filter (fun (regex, _) -> regex.IsMatch(instanceProperty.Name))
+            |> List.map (fun (_, s) -> getEffectiveSchema s ctx)
+
+        let getPropertySchemas (instanceProperty : JProperty) =
+            getSpecificPropertySchema instanceProperty
+            |> Option.toList
+            |> List.append (getPatternPropertySchemas instanceProperty)
+
+        instance
+        |> List.map (fun p -> (getPropertySchemas p, p))
+        |> List.map (fun (propertySchemas, instanceProperty) ->
+            validateProperty propertySchemas instanceProperty (ctx.PushProperty instanceProperty.Name))
+        |> Seq.concat
+
+    and private tokenMatchesSchema (schema : JsonSchema) (instance : JToken) (ctx : JsonContext) : seq<SchemaError> = seq {
         match (schema, matchJToken instance) with
         | JsonSchema.Object objectSchema, MatchedJObject objectInstance ->
-            objectMatchesSchema objectSchema objectInstance ctx
+            yield! objectMatchesSchema objectSchema objectInstance ctx
         | JsonSchema.String stringSchema, MatchedJValueAsString stringInstance ->
-            validateString stringSchema stringInstance ctx
+            yield! validateString stringSchema stringInstance ctx
         | _, _ ->
             let expectedTypes = Set([JsonPrimitive.Object])
             let actualType = instance.Type |> JTokenType.toPrimitive
-            SchemaError.Type {
+            yield SchemaError.Type {
                 Path = ctx.CurrentPath.Render()
                 ExpectedTypes = expectedTypes
-                ActualType = actualType } |> Error
+                ActualType = actualType } }
 
-    let validate (schema : JsonSchema) (instance : JToken) : Result<unit, SchemaError> =
+    let validate (schema : JsonSchema) (instance : JToken) : List<SchemaError> =
         {   SchemaRoot = schema
             InstanceRoot = instance
             CurrentPath = JsonPath [] }
         |> tokenMatchesSchema schema instance
+        |> Seq.toList

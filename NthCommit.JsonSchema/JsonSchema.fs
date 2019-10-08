@@ -23,7 +23,7 @@ type JsonStringSchema =
 
 type JsonObjectSchema = {
     Properties              : JsonPropertySchema list
-    PatternProperties       : (Regex * JsonSchema) list
+    PatternProperties       : (Regex * JsonPropertySchema) list
     Required                : string list
     AdditionalProperties    : bool }
 
@@ -71,12 +71,7 @@ module META_SCHEMA =
                 JsonSchema.Object {
                     Properties = []
                     PatternProperties = [
-                        (Regex ".*", JsonSchema.Object {
-                            Properties = [ 
-                                JsonPropertySchema.Reference <| JsonReference "#" ]
-                            PatternProperties = []
-                            Required = []
-                            AdditionalProperties = true })]
+                        (Regex ".*", JsonPropertySchema.Reference <| JsonReference "#") ]
                     Required = []
                     AdditionalProperties = true })]
         PatternProperties = []
