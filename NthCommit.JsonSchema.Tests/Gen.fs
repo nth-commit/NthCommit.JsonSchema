@@ -93,6 +93,14 @@ module Json =
         token
         |> Gen.map JsonConvert.SerializeObject
 
+    let maybeAdditive (json : string) = gen {
+        let jObject = JsonConvert.DeserializeObject<JObject> json
+        let! properties =
+            property Strings.camelCaseWord
+            |> Gen.list (Range.exponential 0 100)
+        jObject.Add(properties)
+        return JsonConvert.SerializeObject(jObject) }
+
 let notIn source generator =
     generator
     |> Gen.filter (fun x -> List.contains x source |> not)

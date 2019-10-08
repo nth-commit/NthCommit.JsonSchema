@@ -5,13 +5,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="Model.fs" />
     <Compile Include="JsonHelper.fs" />
-    <Compile Include="Parsing\Errors.fs" />
-    <Compile Include="Parsing\SchemaTypeParser.fs" />
-    <Compile Include="Parsing\SchemaPropertiesParser.fs" />
+    <Compile Include="JsonSchema.fs" />
+    <Compile Include="Validation\Validator.fs" />
     <Compile Include="Parsing\Parser.fs" />
-    <Compile Include="ParsingV2\ParserV2.fs" />
   </ItemGroup>
 
   <ItemGroup>

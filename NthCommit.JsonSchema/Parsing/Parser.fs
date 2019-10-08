@@ -1,86 +1,83 @@
 ﻿namespace NthCommit.JsonSchema
 
-open System
 open Newtonsoft.Json.Linq
 open NthCommit.JsonSchema.JsonHelper
-open NthCommit.JsonSchema.Parsing
+open Validator
+open System
 
-module private Map =
+module private JProperty =
+    let stringValue (property : JProperty) = property.Value.Value<string>()
 
-    let keys map =
-        map
-        |> Map.toList
-        |> List.map fst
-        |> Set
+[<RequireQualifiedAccess>]
+type ParserError =
+    | Json
+    | Schema of SchemaError
+    | Semantic
 
-module private List =
+type UnhandledJTokenException(token : JToken) =
+    inherit Exception(sprintf "Unexpected token: %s" token.Path)
 
-    let toMap keyProjection list =
-        list
-        |> List.map (fun x -> (keyProjection x, x))
-        |> Map
-
-module private Result =
-
-    let append (f : 'a -> Result<'b, 'TError>) (x : Result<'a, 'TError>) : Result<('a * 'b), 'TError> =
-        x |> Result.bind (fun a -> f a |> Result.map (fun b -> (a, b)))
-
-    let rec concat (list : List<Result<'T, 'TError>>) : Result<List<'T>, 'TError> =
-        match list with
-        | [] -> Ok []
-        | x :: xs ->
-            match x with
-            | Ok x' -> concat xs |> Result.map (fun xs' -> x' :: xs')
-            | Error e -> e |> Error
+type UnhandledValueException<'a>(value : 'a) =
+    inherit Exception(sprintf "Unhandled value: %s" (value.ToString()))
 
 [<AutoOpen>]
 module Parser =
+
+    module private List =
+
+        let toMap keyProjection list =
+            list
+            |> List.map (fun x -> (keyProjection x, x))
+            |> Map
+
+    let private raiseUnhandledToken token =
+        raise (UnhandledJTokenException token)
+
+    let private raiseUnhandledValue value =
+        raise (UnhandledValueException value)
 
     let private keyPropertiesByName (properties : JProperty list) : Map<string, JProperty> =
         properties
         |> List.toMap (fun p -> p.Name)
 
-    let private tryFindPropertyWithInvalidName (properties : JProperty list) : JProperty option =
+    let private parseType = function
+        | "null"    -> JsonPrimitive.Null
+        | "boolean" -> JsonPrimitive.Boolean
+        | "number"  -> JsonPrimitive.Number
+        | "string"  -> JsonPrimitive.String
+        | "array"   -> JsonPrimitive.Array
+        | "object"  -> JsonPrimitive.Object
+        | x         -> raiseUnhandledValue x
+
+    let private makeSchema jsonPrimitiveOpt =
+        match jsonPrimitiveOpt with
+        | Some jsonPrimitive ->
+            match jsonPrimitive with
+            | JsonPrimitive.Null    -> JsonSchema.Null
+            | JsonPrimitive.Boolean -> JsonSchema.Boolean
+            | JsonPrimitive.Number  -> JsonSchema.Number
+            | JsonPrimitive.String  -> JsonSchema.String <| JsonStringSchema.Unvalidated
+            | JsonPrimitive.Array   -> JsonSchema.Array <| { Items = JsonSchema.Unvalidated }
+            | JsonPrimitive.Object  -> JsonSchema.Object <| {
+                Properties = []
+                PatternProperties = []
+                Required = []
+                AdditionalProperties = true }
+            | _ -> raise (Exception ("TODO"))
+        | None -> JsonSchema.Unvalidated
+
+    let private parseSchema (properties : JProperty list) =
         let propertiesByName = keyPropertiesByName properties
-        Set.difference (propertiesByName |> Map.keys) (Set(["type"; "properties"]))
-        |> Seq.map (fun n -> Map.find n propertiesByName)
-        |> Seq.tryHead
+        propertiesByName
+        |> Map.tryFind "type"
+        |> Option.map JProperty.stringValue
+        |> Option.map parseType
+        |> makeSchema
 
-    let rec private parseSchema (properties : JProperty list) : Result<JsonSchema, ParserError> =
-        match tryFindPropertyWithInvalidName properties with
-        | Some property -> Errors.signalPropertyName property.Path ""
-        | None ->
-            let propertiesByName = keyPropertiesByName properties
-            propertiesByName |> Map.tryFind "type" |> SchemaTypeParser.parse
-            |> Result.append (propertiesByName |> Map.tryFind "properties" |> SchemaPropertiesParser.parse)
-            |> Result.bind (fun (jsonType, schemaProperties) ->
-                match jsonType with
-                | SchemaType.Null -> JsonSchema.Null |> Ok
-                | SchemaType.String -> JsonSchema.String |> Ok
-                | SchemaType.Number -> JsonSchema.Number |> Ok
-                | SchemaType.Boolean -> JsonSchema.Boolean |> Ok
-                | SchemaType.Array -> JsonSchema.Array (JsonSchema.Unvalidated) |> Ok
-                | SchemaType.Object ->
-                    match schemaProperties with
-                    | SchemaProperties.Unset ->
-                        JsonSchema.Object { Properties = []; Required = []; AdditionalProperties = true } |> Ok
-                    | SchemaProperties.UnevaluatedSubSchemas unevaluatedSubSchemas ->
-                        unevaluatedSubSchemas
-                        |> List.map (snd >> parseSchema)
-                        |> Result.concat
-                        |> Result.map (fun subSchemas ->
-                            let properties = subSchemas |> List.zip (unevaluatedSubSchemas |> List.map fst)
-                            JsonSchema.Object { Properties = properties; Required = []; AdditionalProperties = true })
-                | SchemaType.Unset -> JsonSchema.Unvalidated |> Ok)
-
-    let private parseSchemaToken (token : MatchedJToken) : Result<JsonSchema, ParserError> =
-        match token with
-        | MatchedJObject properties -> parseSchema properties
-        | _ -> raise (Exception "")
-
-    let private parseSchemaElement schemaToken : Result<JsonSchema, ParserError> =
-        matchJToken schemaToken
-        |> parseSchemaToken
+    let private parseSchemaToken schemaToken : Result<JsonSchema, ParserError> =
+        match matchJToken schemaToken with
+        | MatchedJObject properties -> parseSchema properties |> Ok
+        | _ -> raiseUnhandledToken schemaToken
 
     let private deserialize schema =
         tryDeserialize schema
@@ -88,4 +85,7 @@ module Parser =
 
     let parse (schema : string) : Result<JsonSchema, ParserError> =
         deserialize schema
-        |> Result.bind parseSchemaElement
+        |> Result.bind (fun schemaToken ->
+            match validate META_SCHEMA schemaToken with
+            | Ok _ -> parseSchemaToken schemaToken
+            | Error schemaError -> schemaError |> ParserError.Schema |> Error)

@@ -4,171 +4,145 @@ open Hedgehog
 open Xunit
 open Swensen.Unquote
 open NthCommit.JsonSchema
-open NthCommit.JsonSchema.Parsing
 open Newtonsoft.Json
 open Newtonsoft.Json.Linq
 open System
+open NthCommit.JsonSchema.Validator
 
-let makeParserError (parserError : ParserError) : Result<JsonSchema, ParserError> =
-    Error parserError
+let primitiveNames = ["null"; "string"; "number"; "boolean"; "array"; "object"]
 
-let invalidJson =
-    ParserError.Json
-    |> makeParserError
+let trivialNullSchema = JsonSchema.Null
 
-let makeInvalidPropertyType path acceptedTypes =
-    ParserError.PropertyType { Path = path; AcceptedTypes = acceptedTypes }
-    |> makeParserError
+let trivialBooleanSchema = JsonSchema.Boolean
 
-let makeInvalidPropertyName path trivia =
-    ParserError.PropertyName { Path = path; Trivia = trivia }
-    |> makeParserError
+let trivialNumberSchema = JsonSchema.Number
 
-let makeInvalidPropertyValue path =
-    ParserError.PropertyValue path
-    |> makeParserError
+let trivialStringSchema =
+    JsonSchema.String JsonStringSchema.Unvalidated
+
+let trivialArraySchema =
+    JsonSchema.Array { Items = JsonSchema.Unvalidated }
+
+let trivialObjectSchema =
+    JsonSchema.Object {
+        Properties              = []
+        PatternProperties       = []
+        Required                = []
+        AdditionalProperties    = true }
+
+module JToken =
+
+    let primitive (jTokenType : JTokenType) =
+        match jTokenType with
+        | JTokenType.Object     -> JsonPrimitive.Object
+        | JTokenType.String     -> JsonPrimitive.String
+        | JTokenType.Boolean    -> JsonPrimitive.Boolean
+        | _ -> JsonPrimitive.Unknown
+
+    let serialize (jToken : JToken) = JsonConvert.SerializeObject jToken
 
 [<Fact>]
 let ``parses rudimentary schema`` () =
     Property.check <| property {
         let! whitespace = Gen.Strings.whitespace
-        let schema = sprintf "{%s}" whitespace
-        parse schema =! Ok JsonSchema.Unvalidated }
+        let schema      = sprintf "{%s}" whitespace
+        Ok JsonSchema.Unvalidated =! parse schema }
 
 [<Fact>]
-let ``reports invalid json`` () =
+let ``parses schema of given "type"`` () =
     Property.check <| property {
-        let! schema = Gen.Json.invalid
-        invalidJson =! parse schema }
+        let! primitive = Gen.item primitiveNames
+        let! schema =
+            sprintf @"{ ""type"": ""%s"" }" primitive
+            |> Gen.Json.maybeAdditive
+        match primitive with
+        | "null"    -> <@ trivialNullSchema     |> Ok = parse schema @>
+        | "boolean" -> <@ trivialBooleanSchema  |> Ok = parse schema @>
+        | "number"  -> <@ trivialNumberSchema   |> Ok = parse schema @>
+        | "string"  -> <@ trivialStringSchema   |> Ok = parse schema @>
+        | "array"   -> <@ trivialArraySchema    |> Ok = parse schema @>
+        | "object"  -> <@ trivialObjectSchema   |> Ok = parse schema @>
+        | x         -> <@ x <> x @> // We must have an unhandled primitive
+        |> test }
 
-[<Fact>]
-let ``reports invalid property name`` () =
-    Property.check <| property {
-        let! propertyName = Gen.Strings.camelCaseWord
-        let! propertyValue = Gen.Json.token |> Gen.map JsonConvert.SerializeObject
-        let schema = sprintf @"{ ""%s"": %s }" propertyName propertyValue
-        makeInvalidPropertyName propertyName "" =! parse schema }
-
-module SchemaType =
-
-    let validSchemaTypes = ["null"; "string"; "number"; "boolean"; "array"; "object"]
+module Object = 
 
     [<Fact>]
-    let ``parses rudimentary "type" schema`` () =
+    let ``parses rudimentary object schema with properties`` () =
         Property.check <| property {
-            let! schemaType = Gen.item validSchemaTypes
-            let expected : Result<JsonSchema, ParserError> =
-                match schemaType with
-                | "null" -> JsonSchema.Null
-                | "string" -> JsonSchema.String
-                | "number" -> JsonSchema.Number
-                | "boolean" -> JsonSchema.Boolean
-                | "array" -> JsonSchema.Array JsonSchema.Unvalidated
-                | "object" -> JsonSchema.Object { Properties = []; Required = []; AdditionalProperties = true; }
-                | _ -> raise (Exception (sprintf "Type '%s' is unhandled by test" schemaType))
-                |> Ok
-            expected =! (parse (sprintf @"{ ""type"": ""%s"" }" schemaType)) }
-
-    [<Fact>]
-    let ``reports invalid type for "type"`` () =
-        Property.check <| property {
-            let! propertyValue =
-                Gen.Json.tokenNotOf JTokenType.String
-                |> Gen.Json.serialize
-            let schema = sprintf @"{ ""type"": %s }" propertyValue
-            makeInvalidPropertyType "type" ["string"] =! parse schema }
-    
-    [<Fact>]
-    let ``reports invalid value for "type"`` () =
-        Property.check <| property {
-            let! propertyValue =
-                Gen.Json.stringValueNotOf validSchemaTypes
-                |> Gen.Json.serialize
-            let schema = sprintf @"{ ""type"": %s }" propertyValue
-            makeInvalidPropertyValue "type" =! parse schema }
-
-module Properties =
-
-    [<Fact>]
-    let ``parses trivial nested schema`` () =
-        let schema = @"
-            {
-                ""type"": ""object"",
-                ""properties"": {}
-            }"
-        let expected = JsonSchema.Object { Properties = []; Required = []; AdditionalProperties = true } |> Ok
-        expected =! parse schema
-
-    [<Fact>]
-    let ``parses second trivial nested schema`` () =
-        Property.check <| property {
-            let! propertyName = Gen.Strings.camelCaseWord
-            let! propertyType = Gen.item SchemaType.validSchemaTypes
-            let schema = @"
-                {
+            let! schema =
+                @"{
                     ""type"": ""object"",
-                    ""properties"": {
-                        """ + propertyName + @""": {
-                            ""type"": """ + propertyType + @"""
-                        }
-                    }
+                    ""properties"": {}
                 }"
-            let expectedType =
-                match propertyType with
-                | "null" -> JsonSchema.Null
-                | "string" -> JsonSchema.String
-                | "number" -> JsonSchema.Number
-                | "boolean" -> JsonSchema.Boolean
-                | "array" -> JsonSchema.Array JsonSchema.Unvalidated
-                | "object" -> JsonSchema.Object { Properties = []; Required = []; AdditionalProperties = true; }
-                | _ -> raise (Exception (sprintf "Type '%s' is unhandled by test" propertyType))
-            let expected =
-                JsonSchema.Object {
-                    Properties = [
-                        (propertyName, expectedType)]
-                    Required = []
-                    AdditionalProperties = true }
-                |> Ok
-            expected =! parse schema }
+                |> Gen.Json.maybeAdditive
+            test <@ Ok <| trivialObjectSchema = parse schema @> }
+
+module Validation =
+
+    let makeParserError (parserError : ParserError) : Result<JsonSchema, ParserError> =
+        Error parserError
+    
+    let makeSchemaError schemaError =
+        schemaError
+        |> ParserError.Schema
+        |> makeParserError
+    
+    let makeSchemaTypeError path expectedTypes actualType =
+        { Path = path; ExpectedTypes = Set(expectedTypes); ActualType = actualType }
+        |> SchemaError.Type
+        |> makeSchemaError
+    
+    let makeSchemaValueError path value =
+        { Path = path; Value = value }
+        |> SchemaError.Value
+        |> makeSchemaError
+    
+    let invalidJson =
+        ParserError.Json
+        |> makeParserError
+
+    let expectSchemaTypeError path expectedTypes (actualToken : JToken) schema =
+        let tokenType = actualToken.Type
+        test <@ makeSchemaTypeError path expectedTypes (tokenType |> JToken.primitive) = parse schema @>
 
     [<Fact>]
-    let ``reports "properties" is invalid if json type is not "object"`` () =
+    let ``reports invalid json`` () =
         Property.check <| property {
-            let! schemaType =
-                SchemaType.validSchemaTypes
-                |> List.filter ((<>) "object")
-                |> Gen.item
-            let! propertiesValue =
-                Gen.Json.token
-                |> Gen.Json.serialize
-            let schema = sprintf @"{ ""type"": ""%s"", ""properties"": %s }" schemaType propertiesValue
-            let expected =
-                makeInvalidPropertyName
-                    "properties"
-                    "Property 'properties' is only valid when 'type' is 'object'"
-            expected =! parse schema }
+            let! schema = Gen.Json.invalid
+            invalidJson =! parse schema }
 
     [<Fact>]
-    let ``reports invalid type for "properties"`` () =
+    let ``reports schema error when schema is not a json object`` () =
         Property.check <| property {
-            let! propertiesValue =
-                Gen.Json.tokenNotOf JTokenType.Object
-                |> Gen.Json.serialize
-            let schema = sprintf @"{ ""type"": ""object"", ""properties"": %s }" propertiesValue
-            makeInvalidPropertyType "properties" ["object"] =! parse schema }
+            let! schemaToken = Gen.Json.tokenNotOf JTokenType.Object
+            let schema = JToken.serialize schemaToken
+            expectSchemaTypeError "" [JsonPrimitive.Object] schemaToken schema }
 
     [<Fact>]
-    let ``reports invalid value for "properties" if not an object of objects`` () =
+    let ``reports schema type error when type is not a string`` () =
         Property.check <| property {
-            let! propertiesPropertyName =
-                Gen.Strings.camelCaseWord
-            let! propertiesPropertyValue =
-                Gen.Json.tokenNotOf JTokenType.Object
-                |> Gen.Json.serialize
-            let schema =
-                sprintf
-                    @"{ ""type"": ""object"", ""properties"": { ""%s"": %s } }"
-                    propertiesPropertyName
-                    propertiesPropertyValue
-            let expectedPath = sprintf "properties.%s" propertiesPropertyName
-            makeInvalidPropertyType expectedPath ["object"] =! parse schema }
+            let! typeToken = Gen.Json.tokenNotOf JTokenType.String
+            let schema = sprintf @"{ ""type"": %s }" (JToken.serialize typeToken)
+            expectSchemaTypeError "type" [JsonPrimitive.String] typeToken schema }
+
+    [<Fact>]
+    let ``reports schema value error when type is not the name of a json primitive`` () =
+        Property.check <| property {
+            let! typeValue =
+                Gen.Strings.defaultString
+                |> Gen.notIn primitiveNames
+            let schema = sprintf @"{ ""type"": ""%s"" }" typeValue
+            makeSchemaValueError "type" typeValue =! parse schema }
+
+    [<Fact>]
+    let ``reports schema type error when properties is not an object`` () =
+        Property.check <| property {
+            let! propertiesToken = Gen.Json.tokenNotOf JTokenType.Object
+            let schema = sprintf @"{ ""type"": ""object"", ""properties"": %s }" (JToken.serialize propertiesToken)
+            expectSchemaTypeError "properties" [JsonPrimitive.Object] propertiesToken schema }
+
+// TODO: Property members validation e.g. has any member that is not an object
+// TODO: Report existing members that are not in the set of what we capture, as the standard is not fully supported so
+//       should flag up these. Will need to add a strict mode (false)
+// TODO: Nested properties validation
