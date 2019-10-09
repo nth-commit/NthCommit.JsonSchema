@@ -1,79 +1,94 @@
 ﻿namespace NthCommit.JsonSchema
 
+open Newtonsoft.Json.Linq
 open System
-open System.Text.RegularExpressions
 
-[<RequireQualifiedAccess>]
-type JsonPrimitive =
-    | Unknown   = 0
-    | Null      = 1
-    | Boolean   = 2
-    | Number    = 3
-    | String    = 4
-    | Array     = 5
-    | Object    = 6
+type ValidationFailureTarget =
+    | Schema    = 1
+    | Instance  = 2
 
-type JsonReference = JsonReference of string
+type ValidationFailureType =
+    | InvalidJson       = 1
+    | SchemaViolation   = 2
 
-[<RequireQualifiedAccess>]
-type JsonStringSchema =
-    | Enum          of string list
-    | Const         of string
-    | Unvalidated
+type ValidationFailure = {
+    Target   : ValidationFailureTarget
+    Type     : ValidationFailureType
+    Message  : string
+    Path     : string }
 
-type JsonObjectSchema = {
-    Properties              : JsonPropertySchema list
-    PatternProperties       : (Regex * JsonPropertySchema) list
-    Required                : string list
-    AdditionalProperties    : bool }
+module JsonSchema =
 
-and JsonPropertySchema =
-    | Standard  of (string * JsonSchema)
-    | Reference of JsonReference
+    module private ValidationFailure =
 
-    member this.Name =
-        match this with
-        | Standard (name, _)    -> name
-        | Reference _           -> "$ref"
+        let private targetString = function
+            | ValidationFailureTarget.Schema    -> "schema"
+            | ValidationFailureTarget.Instance  -> "instance"
+            | _                                 -> raise (Exception ("Unhandled"))
 
-    member this.Value =
-        match this with
-        | Standard (_, schema)  -> schema
-        | Reference _           -> raise (Exception "TODO: Look up schema from path")
+        let fromInvalidJson target = {
+            Target  = target
+            Type    = ValidationFailureType.InvalidJson
+            Message = sprintf "Error deserializing %s: Invalid JSON" (targetString target)
+            Path    = "" }
 
-and JsonArraySchema = {
-    Items : JsonSchema }
+        let private buildSchemaTypeErrorMessage (error : SchemaTypeError) =
+            sprintf
+                @"expected type of %s but recieved %s at path ""%s"""
+                ((error.ExpectedTypes |> Seq.exactlyOne).ToString())
+                (error.ActualType.ToString())
+                error.Path
 
-and JsonSchema =
-    | Null
-    | Number
-    | Boolean
-    | String        of JsonStringSchema
-    | Object        of JsonObjectSchema
-    | Array         of JsonArraySchema
-    | Unvalidated
+        let private buildSchemaErrorMessage prefix error =
+            match error with
+            | SchemaError.Type e    -> buildSchemaTypeErrorMessage e
+            | SchemaError.Value _   -> "value error"
+            |> sprintf "%s: %s" prefix
 
-    member this.Primitive =
-        match this with
-        | String _  -> JsonPrimitive.String
-        | Object _  -> JsonPrimitive.Object
-        | _         -> JsonPrimitive.Unknown
+        let private resolveSchemeErrorPath = function
+            | SchemaError.Type e    -> e.Path
+            | SchemaError.Value e   -> e.Path
 
-[<AutoOpen>]
-module META_SCHEMA =
-    let META_SCHEMA = JsonSchema.Object {
-        Properties = [
-            JsonPropertySchema.Standard (
-                "type",
-                JsonSchema.String <| JsonStringSchema.Enum ["null"; "boolean"; "number"; "string"; "object"; "array"])
-            JsonPropertySchema.Standard (
-                "properties",
-                JsonSchema.Object {
-                    Properties = []
-                    PatternProperties = [
-                        (Regex ".*", JsonPropertySchema.Reference <| JsonReference "#") ]
-                    Required = []
-                    AdditionalProperties = true })]
-        PatternProperties = []
-        Required = []
-        AdditionalProperties = true }
+        let fromSchemaError target prefix error = {
+            Target  = target
+            Type    = ValidationFailureType.SchemaViolation
+            Message = buildSchemaErrorMessage prefix error
+            Path    = resolveSchemeErrorPath error }
+
+        let private SCHEMA_ERROR_IN_PARSING_SCHEMA =
+            "Error validating schema: Schema JSON does not conform to JSON Schema Standard"
+
+        let schemaJsonInvalid = fromInvalidJson ValidationFailureTarget.Schema
+
+        let schemaNotConformingToStandard =  fromSchemaError ValidationFailureTarget.Schema SCHEMA_ERROR_IN_PARSING_SCHEMA
+
+        let fromParserError = function
+            | ParserError.Json                  -> schemaJsonInvalid
+            | ParserError.Schema schemaError    -> schemaNotConformingToStandard schemaError
+            | _ -> raise (Exception ("Unexpected error"))
+
+        let private SCHEMA_ERROR_IN_INSTANCE = "Error validating instance"
+
+        let instanceJsonInvalid = fromInvalidJson ValidationFailureTarget.Instance
+
+        let fromInstanceSchemaError = fromSchemaError ValidationFailureTarget.Instance SCHEMA_ERROR_IN_INSTANCE
+
+    let private parseSchema schemaJson =
+        match Parser.parse schemaJson with
+        | Ok dom    -> Ok dom
+        | Error e   -> Error [ValidationFailure.fromParserError e]
+
+    let private deserializeInstance instanceJson =
+        match JsonHelper.tryDeserialize<JToken> instanceJson with
+        | Ok instanceToken  -> Ok instanceToken
+        | Error _           -> Error [ValidationFailure.instanceJsonInvalid]
+
+    let validate schemaJson instanceJson =
+        match parseSchema schemaJson with
+        | Ok schema ->
+            match deserializeInstance instanceJson with
+            | Ok instanceToken ->
+                Validator.validate schema instanceToken
+                |> List.map ValidationFailure.fromInstanceSchemaError
+            | Error errors -> errors
+        | Error errors  -> errors

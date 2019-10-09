@@ -6,9 +6,10 @@
 
   <ItemGroup>
     <Compile Include="JsonHelper.fs" />
-    <Compile Include="JsonSchema.fs" />
+    <Compile Include="Dom.fs" />
     <Compile Include="Validation\Validator.fs" />
     <Compile Include="Parsing\Parser.fs" />
+    <Compile Include="JsonSchema.fs" />
   </ItemGroup>
 
   <ItemGroup>

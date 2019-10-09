@@ -3,6 +3,8 @@
 open Hedgehog
 open Newtonsoft.Json
 open Newtonsoft.Json.Linq
+open NthCommit.JsonSchema
+open System
 
 module private Result =
 
@@ -59,11 +61,15 @@ module Json =
         |> Gen.filter (tryDeserialize >> Result.isOk)
 
     let value : Gen<JValue> = [
+        JValue.CreateNull() |> Gen.constant
+        Gen.integral (Range.exponential -1000 1000) |> Gen.map (fun i -> JValue(i))
         Gen.bool |> Gen.map (fun b -> JValue(b))
         Strings.camelCaseWord |> Gen.map (fun s -> JValue(s)) ] |> Gen.choice
 
     let token = [
-        value |> Gen.map (fun v -> v :> JToken) ] |> Gen.choice
+        value |> Gen.map (fun v -> v :> JToken)
+        JArray.FromObject([]) |> Gen.constant |> Gen.map (fun a -> a :> JToken)
+        JObject.FromObject({||}) |> Gen.constant |> Gen.map (fun o -> o :> JToken) ] |> Gen.choice
 
     let tokenOf (kind : JTokenType) =
         token
@@ -101,10 +107,39 @@ module Json =
         let oldProperties = jObject.Properties() |> Seq.toList
         let mergedProperties =
             oldProperties @ newProperties
-            |> List.groupBy (fun p -> p.Name)
-            |> List.map snd
-            |> List.concat
+            |> List.distinctBy (fun p -> p.Name)
         return JsonConvert.SerializeObject(JObject (mergedProperties)) }
+
+    let primitive =
+        Gen.item [
+            JsonPrimitive.Null
+            JsonPrimitive.Boolean
+            JsonPrimitive.Number
+            JsonPrimitive.String
+            JsonPrimitive.Array
+            JsonPrimitive.Object ]
+
+    let jsonOfPrimitive primitive =
+        match primitive with
+        | JsonPrimitive.Null    -> JTokenType.Null
+        | JsonPrimitive.Boolean -> JTokenType.Boolean
+        | JsonPrimitive.Number  -> JTokenType.Integer
+        | JsonPrimitive.String  -> JTokenType.String
+        | JsonPrimitive.Array   -> JTokenType.Array
+        | JsonPrimitive.Object  -> JTokenType.Object
+        |> tokenOf
+        |> serialize
+
+    let jsonNotOfPrimitive primitive =
+        match primitive with
+        | JsonPrimitive.Null    -> JTokenType.Null
+        | JsonPrimitive.Boolean -> JTokenType.Boolean
+        | JsonPrimitive.Number  -> JTokenType.Integer
+        | JsonPrimitive.String  -> JTokenType.String
+        | JsonPrimitive.Array   -> JTokenType.Array
+        | JsonPrimitive.Object  -> JTokenType.Object
+        |> tokenNotOf
+        |> serialize
 
 let notIn source generator =
     generator

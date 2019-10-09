@@ -4,27 +4,28 @@ open Hedgehog
 open Xunit
 open Swensen.Unquote
 open NthCommit.JsonSchema
+open NthCommit.JsonSchema.Dom
+open NthCommit.JsonSchema.Parser
 open Newtonsoft.Json
 open Newtonsoft.Json.Linq
 open System
-open NthCommit.JsonSchema.Validator
 
 let primitiveNames = ["null"; "string"; "number"; "boolean"; "array"; "object"]
 
-let trivialNullSchema = JsonSchema.Null
+let trivialNullSchema = JsonDocument.Null
 
-let trivialBooleanSchema = JsonSchema.Boolean
+let trivialBooleanSchema = JsonDocument.Boolean
 
-let trivialNumberSchema = JsonSchema.Number
+let trivialNumberSchema = JsonDocument.Number
 
 let trivialStringSchema =
-    JsonSchema.String JsonStringSchema.Unvalidated
+    JsonDocument.String JsonString.Unvalidated
 
 let trivialArraySchema =
-    JsonSchema.Array { Items = JsonSchema.Unvalidated }
+    JsonDocument.Array { Items = JsonDocument.Unvalidated }
 
 let trivialObjectSchema =
-    JsonSchema.Object {
+    JsonDocument.Object {
         Properties              = []
         PatternProperties       = []
         Required                = []
@@ -34,10 +35,13 @@ module JToken =
 
     let primitive (jToken : JToken) =
         match jToken.Type with
-        | JTokenType.Object     -> JsonPrimitive.Object
-        | JTokenType.String     -> JsonPrimitive.String
+        | JTokenType.Null       -> JsonPrimitive.Null
         | JTokenType.Boolean    -> JsonPrimitive.Boolean
-        | _ -> JsonPrimitive.Unknown
+        | JTokenType.Integer    -> JsonPrimitive.Number
+        | JTokenType.String     -> JsonPrimitive.String
+        | JTokenType.Array      -> JsonPrimitive.Array
+        | JTokenType.Object     -> JsonPrimitive.Object
+        | _                     -> raise (Exception ("Unhandled primitive"))
 
     let serialize (jToken : JToken) = JsonConvert.SerializeObject jToken
 
@@ -46,7 +50,7 @@ let ``parses rudimentary schema`` () =
     Property.check <| property {
         let! whitespace = Gen.Strings.whitespace
         let schema      = sprintf "{%s}" whitespace
-        Ok JsonSchema.Unvalidated =! parse schema }
+        Ok JsonDocument.Unvalidated =! parse schema }
 
 [<Fact>]
 let ``parses schema of given "type"`` () =
@@ -65,7 +69,7 @@ let ``parses schema of given "type"`` () =
         | x         -> <@ x <> x @> // We must have an unhandled primitive
         |> test }
 
-let makeParserError (parserError : ParserError) : Result<JsonSchema, ParserError> =
+let makeParserError (parserError : ParserError) : Result<JsonDocument, ParserError> =
     Error parserError
 
 let makeSchemaError schemaError =
@@ -105,7 +109,7 @@ module Validation =
         Property.check <| property {
             let! schemaToken = Gen.Json.tokenNotOf JTokenType.Object
             let schema = JToken.serialize schemaToken
-            expectSchemaTypeError "" [JsonPrimitive.Object] (JToken.primitive schemaToken) schema }
+            expectSchemaTypeError "#" [JsonPrimitive.Object] (JToken.primitive schemaToken) schema }
 
     [<Fact>]
     let ``reports schema type error when type is not a string`` () =
