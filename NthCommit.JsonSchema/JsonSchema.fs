@@ -1,7 +1,7 @@
 ﻿namespace NthCommit.JsonSchema
 
-open Newtonsoft.Json.Linq
 open System
+open Newtonsoft.Json.Linq
 
 type ValidationFailureTarget =
     | Schema    = 1
@@ -83,6 +83,7 @@ module JsonSchema =
         | Ok instanceToken  -> Ok instanceToken
         | Error _           -> Error [ValidationFailure.instanceJsonInvalid]
 
+    [<CompiledName("Validate")>]
     let validate schemaJson instanceJson =
         match parseSchema schemaJson with
         | Ok schema ->
@@ -92,3 +93,4 @@ module JsonSchema =
                 |> List.map ValidationFailure.fromInstanceSchemaError
             | Error errors -> errors
         | Error errors  -> errors
+        |> System.Collections.Generic.List

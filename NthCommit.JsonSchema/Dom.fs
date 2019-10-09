@@ -20,7 +20,7 @@ module Dom =
         AdditionalProperties    : bool }
 
     and JsonObjectProperty =
-        | Inline    of (string * JsonDocument)
+        | Inline    of (string * JsonSchemaDocument)
         | Reference of JsonReference
 
         member this.Name =
@@ -29,9 +29,9 @@ module Dom =
             | Reference _           -> "$ref"
 
     and JsonArray = {
-        Items : JsonDocument }
+        Items : JsonSchemaDocument }
 
-    and JsonDocument =
+    and JsonSchemaDocument =
         | Null
         | Number
         | Boolean

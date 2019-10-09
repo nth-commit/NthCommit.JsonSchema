@@ -1,16 +1,18 @@
-﻿module ValidationTests
+﻿module JsonSchemaTests
 
 open Xunit
 open Hedgehog
 open NthCommit.JsonSchema
 open Swensen.Unquote
 
+let validate schema instance = JsonSchema.validate schema instance |> Seq.toList
+
 [<Fact>]
 let ``invalid schema json returns parser error of invalid json`` () =
     Property.check <| property {
         let! schema = Gen.Json.invalid
         let! instance = Gen.Strings.defaultString
-        test <@ JsonSchema.validate schema instance
+        test <@ validate schema instance
                 |> List.exactlyOne
                 |> (fun x ->
                         x.Target = ValidationFailureTarget.Schema &&
@@ -20,7 +22,7 @@ let ``invalid schema json returns parser error of invalid json`` () =
 let ``invalid instance json returns schema error of invalid json`` () =
     Property.check <| property {
         let! instance = Gen.Json.invalid
-        test <@ JsonSchema.validate "{}" instance
+        test <@ validate "{}" instance
                 |> List.exactlyOne
                 |> (fun x ->
                         x.Target = ValidationFailureTarget.Instance &&
@@ -30,7 +32,7 @@ let ``invalid instance json returns schema error of invalid json`` () =
 let ``any instance is valid against rudimentary schema`` () =
     Property.check <| property {
         let! instance = Gen.Json.valid
-        test <@ [] = JsonSchema.validate "{}" instance @> }
+        test <@ [] = (JsonSchema.validate "{}" instance |> Seq.toList) @> }
 
 [<Fact>]
 let ``any instance is valid against schema of the same json primitive`` () =
@@ -38,7 +40,7 @@ let ``any instance is valid against schema of the same json primitive`` () =
         let! primitive = Gen.Json.primitive
         let! instance = Gen.Json.jsonOfPrimitive primitive
         let schema = sprintf @"{ ""type"": ""%s"" }" <| primitive.ToSchemaTypeValue()
-        test <@ [] = JsonSchema.validate schema instance @> }
+        test <@ [] = (JsonSchema.validate schema instance |> Seq.toList) @> }
 
 [<Fact>]
 let ``any instance is invalid against schema of a different json primitive`` () =
@@ -52,7 +54,7 @@ let ``any instance is invalid against schema of a different json primitive`` () 
                 @"Error validating instance: expected type of %s but recieved %s at path ""#"""
                 (schemaPrimitive.ToString())
                 (instancePrimitive.ToString())
-        test <@ JsonSchema.validate schema instance
+        test <@ validate schema instance
                 |> List.exactlyOne
                 |> (fun x ->
                         x.Target = ValidationFailureTarget.Instance &&

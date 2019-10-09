@@ -12,20 +12,20 @@ open System
 
 let primitiveNames = ["null"; "string"; "number"; "boolean"; "array"; "object"]
 
-let trivialNullSchema = JsonDocument.Null
+let trivialNullSchema = JsonSchemaDocument.Null
 
-let trivialBooleanSchema = JsonDocument.Boolean
+let trivialBooleanSchema = JsonSchemaDocument.Boolean
 
-let trivialNumberSchema = JsonDocument.Number
+let trivialNumberSchema = JsonSchemaDocument.Number
 
 let trivialStringSchema =
-    JsonDocument.String JsonString.Unvalidated
+    JsonSchemaDocument.String JsonString.Unvalidated
 
 let trivialArraySchema =
-    JsonDocument.Array { Items = JsonDocument.Unvalidated }
+    JsonSchemaDocument.Array { Items = JsonSchemaDocument.Unvalidated }
 
 let trivialObjectSchema =
-    JsonDocument.Object {
+    JsonSchemaDocument.Object {
         Properties              = []
         PatternProperties       = []
         Required                = []
@@ -50,7 +50,7 @@ let ``parses rudimentary schema`` () =
     Property.check <| property {
         let! whitespace = Gen.Strings.whitespace
         let schema      = sprintf "{%s}" whitespace
-        Ok JsonDocument.Unvalidated =! parse schema }
+        Ok JsonSchemaDocument.Unvalidated =! parse schema }
 
 [<Fact>]
 let ``parses schema of given "type"`` () =
@@ -69,7 +69,7 @@ let ``parses schema of given "type"`` () =
         | x         -> <@ x <> x @> // We must have an unhandled primitive
         |> test }
 
-let makeParserError (parserError : ParserError) : Result<JsonDocument, ParserError> =
+let makeParserError (parserError : ParserError) : Result<JsonSchemaDocument, ParserError> =
     Error parserError
 
 let makeSchemaError schemaError =

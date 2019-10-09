@@ -66,17 +66,23 @@ module Validator =
                 |> List.reduce (sprintf "%s.%s")
 
     type JsonContext =
-        {   SchemaRoot : JsonDocument
+        {   SchemaRoot : JsonSchemaDocument
             InstanceRoot : JToken
             CurrentPath : JsonPath }
             member this.PushProperty property =
                 { this with CurrentPath = this.CurrentPath.Push (PropertyAccess property) }
 
-    let private reportTypeMismatch (schema : JsonDocument) (instance : JToken) (ctx : JsonContext) =
+    let private reportTypeMismatch (schema : JsonSchemaDocument) (instance : JToken) (ctx : JsonContext) =
         SchemaError.Type {
             Path            = ctx.CurrentPath.Render()
             ExpectedTypes   = Set([schema.Primitive])
             ActualType      = instance.Type |> JTokenType.toPrimitive }
+
+    let private validateInstanceIsValue (instance : 'a) (value : 'a) (ctx : JsonContext) = seq {
+        if value <> instance
+        then yield SchemaError.Value {
+            Path = ctx.CurrentPath.Render()
+            Value = instance.ToString() } }
 
     let private validateInstanceInValues (instance : 'a) (values : 'a list) (ctx : JsonContext) = seq {
         if values |> List.contains instance |> not
@@ -87,20 +93,20 @@ module Validator =
     let private stringMatchesSchema (schema : JsonString) (instance : string) (ctx : JsonContext) : seq<SchemaError> =
         match schema with
         | JsonString.Unvalidated  -> Seq.empty
+        | JsonString.Const value  -> validateInstanceIsValue instance value ctx
         | JsonString.Enum values  -> validateInstanceInValues instance values ctx
-        | JsonString.Const _      -> raise (Exception ("Unhandled: JsonStringSchema.Const"))
 
-    let private evaluateReference (JsonReference reference) (ctx : JsonContext) : JsonDocument =
+    let private evaluateReference (JsonReference reference) (ctx : JsonContext) : JsonSchemaDocument =
         match reference with
         | "#"   -> ctx.SchemaRoot
         | x     -> raise (NotImplementedException ("Reference is not supported: " + x))
 
-    let private getEffectiveSchema (propertySchema : JsonObjectProperty) (ctx : JsonContext) : JsonDocument =
+    let private getEffectiveSchema (propertySchema : JsonObjectProperty) (ctx : JsonContext) : JsonSchemaDocument =
         match propertySchema with
         | Inline (_, schema)  -> schema
         | Reference reference   -> evaluateReference reference ctx
 
-    let rec private validateProperty (schemas : JsonDocument list) (instance : JProperty) (ctx : JsonContext) : seq<SchemaError> =
+    let rec private validateProperty (schemas : JsonSchemaDocument list) (instance : JProperty) (ctx : JsonContext) : seq<SchemaError> =
         schemas
         |> List.map (fun s -> tokenMatchesSchema s instance.Value ctx)
         |> Seq.concat
@@ -110,12 +116,12 @@ module Validator =
             schema.Properties
             |> List.toMap (fun p -> p.Name)
 
-        let getSpecificPropertySchema (instanceProperty : JProperty) : JsonDocument option =
+        let getSpecificPropertySchema (instanceProperty : JProperty) : JsonSchemaDocument option =
             schemaPropertiesByName
             |> Map.tryFind (instanceProperty.Name)
             |> Option.map (fun propertySchema -> getEffectiveSchema propertySchema ctx)
 
-        let getPatternPropertySchemas (instanceProperty : JProperty) : JsonDocument list =
+        let getPatternPropertySchemas (instanceProperty : JProperty) : JsonSchemaDocument list =
             schema.PatternProperties
             |> List.filter (fun (regex, _) -> regex.IsMatch(instanceProperty.Name))
             |> List.map (fun (_, s) -> getEffectiveSchema s ctx)
@@ -131,18 +137,18 @@ module Validator =
             validateProperty propertySchemas instanceProperty (ctx.PushProperty instanceProperty.Name))
         |> Seq.concat
 
-    and private tokenMatchesSchema (schema : JsonDocument) (instance : JToken) (ctx : JsonContext) : seq<SchemaError> = seq {
+    and private tokenMatchesSchema (schema : JsonSchemaDocument) (instance : JToken) (ctx : JsonContext) : seq<SchemaError> = seq {
         match (schema, matchJToken instance) with
-        | JsonDocument.Unvalidated, _                       -> yield! Seq.empty
-        | JsonDocument.Null,        MatchedJValueAsNull     -> yield! Seq.empty
-        | JsonDocument.Boolean,     MatchedJValueAsBool _   -> yield! Seq.empty
-        | JsonDocument.Number,      MatchedJValueAsInt _    -> yield! Seq.empty
-        | JsonDocument.String s,    MatchedJValueAsString i -> yield! stringMatchesSchema s i ctx
-        | JsonDocument.Array _,     MatchedJArray _         -> yield! Seq.empty
-        | JsonDocument.Object s,    MatchedJObject i        -> yield! objectMatchesSchema s i ctx
-        | _,                        _                       -> yield reportTypeMismatch schema instance ctx }
+        | JsonSchemaDocument.Unvalidated, _                       -> yield! Seq.empty
+        | JsonSchemaDocument.Null,        MatchedJValueAsNull     -> yield! Seq.empty
+        | JsonSchemaDocument.Boolean,     MatchedJValueAsBool _   -> yield! Seq.empty
+        | JsonSchemaDocument.Number,      MatchedJValueAsInt _    -> yield! Seq.empty
+        | JsonSchemaDocument.String s,    MatchedJValueAsString i -> yield! stringMatchesSchema s i ctx
+        | JsonSchemaDocument.Array _,     MatchedJArray _         -> yield! Seq.empty
+        | JsonSchemaDocument.Object s,    MatchedJObject i        -> yield! objectMatchesSchema s i ctx
+        | _,                        _                             -> yield reportTypeMismatch schema instance ctx }
 
-    let validate (schema : JsonDocument) (instance : JToken) : List<SchemaError> =
+    let validate (schema : JsonSchemaDocument) (instance : JToken) : List<SchemaError> =
         {   SchemaRoot = schema
             InstanceRoot = instance
             CurrentPath = JsonPath [] }
