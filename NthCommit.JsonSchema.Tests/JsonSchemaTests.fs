@@ -51,7 +51,7 @@ let ``any instance is invalid against schema of a different json primitive`` () 
         let schema = sprintf @"{ ""type"": ""%s"" }" <| schemaPrimitive.ToSchemaTypeValue()
         let expectedMessage =
             sprintf
-                @"Error validating instance: expected type of %s but recieved %s at path ""#"""
+                @"Error validating instance: expected type of %s but received %s at path ""#"""
                 (schemaPrimitive.ToString())
                 (instancePrimitive.ToString())
         test <@ validate schema instance

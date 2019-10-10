@@ -34,7 +34,7 @@ module JsonSchema =
 
         let private buildSchemaTypeErrorMessage (error : SchemaTypeError) =
             sprintf
-                @"expected type of %s but recieved %s at path ""%s"""
+                @"expected type of %s but received %s at path ""%s"""
                 ((error.ExpectedTypes |> Seq.exactlyOne).ToString())
                 (error.ActualType.ToString())
                 error.Path

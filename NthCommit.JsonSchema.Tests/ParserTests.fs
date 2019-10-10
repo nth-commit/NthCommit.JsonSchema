@@ -83,7 +83,6 @@ let makeSchemaTypeError path expectedTypes actualType =
     |> makeSchemaError
 
 let expectSchemaTypeError path expectedTypes actualType schema =
-    //let tokenType = actualToken.Type
     test <@ makeSchemaTypeError path expectedTypes actualType = parse schema @>
 
 module Validation =

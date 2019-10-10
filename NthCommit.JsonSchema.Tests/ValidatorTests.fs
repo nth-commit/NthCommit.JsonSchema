@@ -66,12 +66,43 @@ module Gen =
 
         module Mutations =
 
-            let collectJsonElementMutations
-                (element : JsonSchemaElement)
-                (mutator : JsonSchemaElement -> Option<Gen<JsonSchemaElement>>) : seq<Gen<JsonSchemaElement>> = seq {
+            let private mutateElement (mutator : JsonSchemaElement -> Option<Gen<JsonSchemaElement>>) element = seq {
                     match mutator element with
                     | Some mutation -> yield mutation
                     | None _ -> yield! Seq.empty }
+
+            let private mutateProperty mutator (spec : JsonSchemaObjectProperty) =
+                match spec with
+                | Inline (propertyName, element) ->
+                    mutateElement mutator element
+                    |> Seq.map (Gen.map (fun element' -> Inline (propertyName, element')))
+                | Reference _ -> Seq.empty
+
+            let private mutateObject mutator (spec : JsonSchemaObject) : seq<Gen<JsonSchemaObject>> = seq {
+                yield!
+                    spec.Properties
+                    |> List.indexed
+                    |> List.map (fun (i, propertySpec) ->
+                        propertySpec
+                        |> mutateProperty mutator
+                        |> Seq.map (Gen.map (fun propertySpec' ->
+                            let rebuiltProperties =
+                                spec.Properties
+                                |> List.indexed
+                                |> List.map (fun (j, p) -> if i = j then propertySpec' else p)
+                            { spec with Properties = rebuiltProperties })))
+                    |> Seq.concat }
+
+            let collectJsonElementMutations
+                (element : JsonSchemaElement)
+                (mutator : JsonSchemaElement -> Option<Gen<JsonSchemaElement>>) : seq<Gen<JsonSchemaElement>> = seq {
+                    yield! mutateElement mutator element
+                    match element with
+                    | JsonSchemaElement.Object spec ->
+                        yield!
+                            mutateObject mutator spec
+                            |> Seq.map (Gen.map (JsonSchemaElement.Object))
+                    | _ -> yield! Seq.empty }
 
             let tryMutateJsonElement (element : JsonSchemaElement) (mutator : JsonSchemaElement -> Option<Gen<JsonSchemaElement>>) = gen {
                 let mutations = collectJsonElementMutations element mutator
@@ -87,6 +118,9 @@ module Gen =
                 |> Gen.map Option.get
 
     module Instance =
+
+        type InstanceGenOptions = {
+            GenerateAllProperties : bool }
 
         let rec private concat (gens : List<Gen<'a>>) : Gen<List<'a>> = gen {
             match gens with
@@ -131,43 +165,46 @@ module Gen =
                 raise (Exception("unhandled"))
                 return JProperty(null) }
 
-        let private jsonObject json (spec : JsonSchemaObject) : Gen<JToken> = gen {
+        let private jsonObject json (options : InstanceGenOptions) (spec : JsonSchemaObject) : Gen<JToken> = gen {
             let! propertySpecs =
-                spec.Properties |> manyOrNoItems
+                if options.GenerateAllProperties
+                then spec.Properties |> shuffle
+                else spec.Properties |> manyOrNoItems
             let! properties =
                 propertySpecs
                 |> List.map (jsonProperty json)
                 |> concat
             return JObject(properties) :> JToken }
 
-        let rec json (schema : JsonSchemaElement) : Gen<JToken> =
+        let rec json (options : InstanceGenOptions) (schema : JsonSchemaElement) : Gen<JToken> =
             match schema with
             | JsonSchemaElement.Null -> createJValue null |> Gen.constant
             | JsonSchemaElement.Number -> jsonNumber
             | JsonSchemaElement.String spec -> jsonString spec
-            | JsonSchemaElement.Object spec -> jsonObject json spec
+            | JsonSchemaElement.Object spec -> jsonObject (json options) (options) spec
             | _ -> raise (Exception ("Unhandled"))
 
-let DEFAULT_SCHEMA_RANGE = ((Range.linear 0 10), (Range.linear 1 5))
+        let jsonDefault = json { GenerateAllProperties = false }
+
+open Gen.Instance
+
+let DEFAULT_SCHEMA_RANGE = ((Range.exponential 0 6), (Range.linear 1 6))
 
 [<Fact>]
-let ``PREMISE: test can generate a valid json instance`` () =
-    Property.check' 10<tests> <| property {
+let ``premise: test can generate a valid json instance`` () =
+    Property.check <| property {
         let! schema = Gen.Schema.jsonElement DEFAULT_SCHEMA_RANGE
-        let! instance = Gen.Instance.json schema
+        let! instance = Gen.Instance.jsonDefault schema
         test <@ Validator.validate schema instance |> List.isEmpty @> }
-
-let tryNullifyDocumentType = function
-    | JsonSchemaElement.Null -> None
-    | _ -> JsonSchemaElement.Null |> Gen.constant |> Some
 
 let mutateDocumentType (schema : JsonSchemaElement) =
     Gen.Schema.jsonElementNotOfType DEFAULT_SCHEMA_RANGE schema.Primitive
 
 [<Fact>]
 let ``validates when type of schema doesn't match type of instance`` () =
-    Property.check' 10<tests> <| property {
+    Property.check <| property {
+        let opts : InstanceGenOptions = { GenerateAllProperties = true }
         let! schema = Gen.Schema.jsonElement DEFAULT_SCHEMA_RANGE
         let! schema' = Gen.Schema.Mutations.mutateJsonElement schema mutateDocumentType
-        let! instance = Gen.Instance.json schema'
-        test <@ Validator.validate schema instance |> List.isEmpty |> not @> }
+        let! instance = Gen.Instance.json opts schema' |> Gen.Json.serialize
+        test <@ Validator.validate2 schema instance |> List.isEmpty |> not @> }

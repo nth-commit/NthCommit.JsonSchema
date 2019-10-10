@@ -154,3 +154,6 @@ module Validator =
             CurrentPath = JsonPath [] }
         |> tokenMatchesSchema schema instance
         |> Seq.toList
+
+    let validate2 (schema : JsonSchemaElement) (instance : string) : List<SchemaError> =
+        validate schema (Newtonsoft.Json.JsonConvert.DeserializeObject<JToken> instance)
