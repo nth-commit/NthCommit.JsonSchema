@@ -8,6 +8,15 @@ open NthCommit.JsonSchema
 open NthCommit.JsonSchema.Dom
 open Newtonsoft.Json.Linq
 
+module private Result =
+
+    let isOk result =
+        match result with
+        | Ok _ -> true
+        | Error _ -> false
+
+    let isError = isOk >> not
+
 module Gen =
 
     module private Range =
@@ -22,12 +31,21 @@ module Gen =
 
         let jsonNumber = Gen.constant JsonSchemaElement.Number
 
-        let jsonString range =
-            Gen.choice [
-                Gen.Strings.defaultString |> Gen.list range |> Gen.map JsonSchemaString.Enum
-                Gen.Strings.defaultString |> Gen.map JsonSchemaString.Const 
-                Gen.constant JsonSchemaString.Unvalidated ]
+        let jsonEnumString =
+            Gen.Strings.defaultString
+            |> Gen.list (Range.linear 1 20)
+            |> Gen.map (Set >> JsonSchemaString.Enum >> JsonSchemaElement.String)
+
+        let jsonConstString =
+            Gen.Strings.defaultString
+            |> Gen.map JsonSchemaString.Const
             |> Gen.map JsonSchemaElement.String
+
+        let jsonString =
+            Gen.choice [
+                jsonEnumString
+                jsonConstString
+                Gen.constant JsonSchemaString.Unvalidated |> Gen.map JsonSchemaElement.String ]
 
         let jsonObjectInlineProperty jsonSchemaDocument = gen {
             let! propertyName = Gen.Strings.camelCaseWord
@@ -53,7 +71,7 @@ module Gen =
         let rec jsonElement (degree, depth) : Gen<JsonSchemaElement> = Gen.choice [
             jsonNull
             jsonNumber
-            jsonString (Range.linear 1 20)
+            jsonString
             jsonObject jsonElement (degree, depth) ]
 
         let jsonElementOfType (degree, depth) primitive =
@@ -66,19 +84,19 @@ module Gen =
 
         module Mutations =
 
-            let private mutateElement (mutator : JsonSchemaElement -> Option<Gen<JsonSchemaElement>>) element = seq {
-                    match mutator element with
-                    | Some mutation -> yield mutation
-                    | None _ -> yield! Seq.empty }
+            let private runMutation (mutator : JsonSchemaElement -> Option<Gen<JsonSchemaElement>>) element = seq {
+                match mutator element with
+                | Some mutation -> yield mutation
+                | None _ -> () }
 
-            let private mutateProperty mutator (spec : JsonSchemaObjectProperty) =
+            let rec private mutateProperty mutator (spec : JsonSchemaObjectProperty) =
                 match spec with
                 | Inline (propertyName, element) ->
                     mutateElement mutator element
                     |> Seq.map (Gen.map (fun element' -> Inline (propertyName, element')))
                 | Reference _ -> Seq.empty
 
-            let private mutateObject mutator (spec : JsonSchemaObject) : seq<Gen<JsonSchemaObject>> = seq {
+            and private mutateObject mutator (spec : JsonSchemaObject) : seq<Gen<JsonSchemaObject>> = seq {
                 yield!
                     spec.Properties
                     |> List.indexed
@@ -93,29 +111,25 @@ module Gen =
                             { spec with Properties = rebuiltProperties })))
                     |> Seq.concat }
 
-            let collectJsonElementMutations
-                (element : JsonSchemaElement)
-                (mutator : JsonSchemaElement -> Option<Gen<JsonSchemaElement>>) : seq<Gen<JsonSchemaElement>> = seq {
-                    yield! mutateElement mutator element
-                    match element with
-                    | JsonSchemaElement.Object spec ->
-                        yield!
-                            mutateObject mutator spec
-                            |> Seq.map (Gen.map (JsonSchemaElement.Object))
-                    | _ -> yield! Seq.empty }
+            and private recursivelyRunMutation (mutator : JsonSchemaElement -> Option<Gen<JsonSchemaElement>>) element =
+                match element with
+                | JsonSchemaElement.Object spec ->
+                    mutateObject mutator spec
+                    |> Seq.map (Gen.map (JsonSchemaElement.Object))
+                | _ -> Seq.empty
 
-            let tryMutateJsonElement (element : JsonSchemaElement) (mutator : JsonSchemaElement -> Option<Gen<JsonSchemaElement>>) = gen {
-                let mutations = collectJsonElementMutations element mutator
-                if Seq.isEmpty mutations
-                then return None
-                else
-                    let! mutationGenerator = Gen.item mutations
-                    let! mutation = mutationGenerator
-                    return mutation |> Some }
+            and mutateElement
+                (mutator : JsonSchemaElement -> Option<Gen<JsonSchemaElement>>)
+                (element : JsonSchemaElement) : seq<Gen<JsonSchemaElement>> = seq {
+                    yield! runMutation mutator element
+                    yield! recursivelyRunMutation mutator element }
 
-            let mutateJsonElement (element : JsonSchemaElement) (mutator : JsonSchemaElement -> Gen<JsonSchemaElement>) =
-                tryMutateJsonElement element (mutator >> Some)
-                |> Gen.map Option.get
+            let tryMutateSchema (mutator : JsonSchemaElement -> Option<Gen<JsonSchemaElement>>) (element : JsonSchemaElement) = gen {
+                let mutations = mutateElement mutator element
+                let! mutationGenerator = Gen.item mutations
+                return! mutationGenerator }
+
+            let mutateSchema (mutator : JsonSchemaElement -> Gen<JsonSchemaElement>) = tryMutateSchema (mutator >> Some)
 
     module Instance =
 
@@ -176,13 +190,15 @@ module Gen =
                 |> concat
             return JObject(properties) :> JToken }
 
-        let rec json (options : InstanceGenOptions) (schema : JsonSchemaElement) : Gen<JToken> =
+        let rec private jsonElement (options : InstanceGenOptions) (schema : JsonSchemaElement) : Gen<JToken> =
             match schema with
             | JsonSchemaElement.Null -> createJValue null |> Gen.constant
             | JsonSchemaElement.Number -> jsonNumber
             | JsonSchemaElement.String spec -> jsonString spec
-            | JsonSchemaElement.Object spec -> jsonObject (json options) (options) spec
+            | JsonSchemaElement.Object spec -> jsonObject (jsonElement options) (options) spec
             | _ -> raise (Exception ("Unhandled"))
+
+        let json options schema = jsonElement options schema |> Gen.Json.serialize
 
         let jsonDefault = json { GenerateAllProperties = false }
 
@@ -195,16 +211,79 @@ let ``premise: test can generate a valid json instance`` () =
     Property.check <| property {
         let! schema = Gen.Schema.jsonElement DEFAULT_SCHEMA_RANGE
         let! instance = Gen.Instance.jsonDefault schema
-        test <@ Validator.validate schema instance |> List.isEmpty @> }
+        test <@ Validator.validate schema instance |> Result.isOk @> }
 
 let mutateDocumentType (schema : JsonSchemaElement) =
     Gen.Schema.jsonElementNotOfType DEFAULT_SCHEMA_RANGE schema.Primitive
 
 [<Fact>]
-let ``validates when type of schema doesn't match type of instance`` () =
+let ``validation fails when type of schema doesn't match type of instance`` () =
     Property.check <| property {
-        let opts : InstanceGenOptions = { GenerateAllProperties = true }
         let! schema = Gen.Schema.jsonElement DEFAULT_SCHEMA_RANGE
-        let! schema' = Gen.Schema.Mutations.mutateJsonElement schema mutateDocumentType
-        let! instance = Gen.Instance.json opts schema' |> Gen.Json.serialize
-        test <@ Validator.validate2 schema instance |> List.isEmpty |> not @> }
+        let! schema' = Gen.Schema.Mutations.mutateSchema mutateDocumentType schema
+        let! instance = Gen.Instance.json { GenerateAllProperties = true } schema'
+        test <@ Validator.validate schema instance |>  Result.isError @> }
+
+module Strings =
+
+    let propertyContainsSchemaWhere (predicate : JsonSchemaElement -> bool) = function
+        | Inline (_, schema) -> predicate schema
+        | Reference _ -> false // The reference should be traversed elsewhere
+
+    let rec schemaDefinesStringWhere (predicate : JsonSchemaString -> bool) = function
+        | JsonSchemaElement.String spec -> predicate spec
+        | JsonSchemaElement.Object spec ->
+            spec.Properties
+            |> List.map (propertyContainsSchemaWhere <| schemaDefinesStringWhere predicate)
+            |> List.exists id
+        | _ -> false
+
+    let stringIsConst = function
+        | JsonSchemaString.Const _ -> true
+        | _ -> false
+
+    let tryMutateConstStringSpec element =
+        match element with
+        | JsonSchemaElement.String spec ->
+            match spec with
+            | JsonSchemaString.Const _ ->
+                Gen.Schema.jsonConstString
+                |> Gen.filter ((<>) element)
+                |> Some
+            | _ -> None
+        | _ -> None
+
+    [<Fact>]
+    let ``validation fails when string is not equal to const specification`` () =
+        Property.check <| property {
+            let! schema =
+                Gen.Schema.jsonElement DEFAULT_SCHEMA_RANGE
+                |> Gen.filter (schemaDefinesStringWhere stringIsConst)
+            let! schema' = Gen.Schema.Mutations.tryMutateSchema tryMutateConstStringSpec schema
+            let! instance = Gen.Instance.json { GenerateAllProperties = true } schema'
+            test <@ Validator.validate schema instance |>  Result.isError @> }
+
+    let stringIsEnum = function
+        | JsonSchemaString.Enum _ -> true
+        | _ -> false
+
+    let tryMutateEnumStringSpec element =
+        match element with
+        | JsonSchemaElement.String spec ->
+            match spec with
+            | JsonSchemaString.Enum _ ->
+                Gen.Schema.jsonEnumString
+                |> Gen.filter ((<>) element)
+                |> Some
+            | _ -> None
+        | _ -> None
+
+    [<Fact>]
+    let ``validation fails when string is not in enum specification`` () =
+        Property.check <| property {
+            let! schema =
+                Gen.Schema.jsonElement DEFAULT_SCHEMA_RANGE
+                |> Gen.filter (schemaDefinesStringWhere stringIsEnum)
+            let! schema' = Gen.Schema.Mutations.tryMutateSchema tryMutateEnumStringSpec schema
+            let! instance = Gen.Instance.json { GenerateAllProperties = true } schema'
+            test <@ Validator.validate schema instance |>  Result.isError @> }

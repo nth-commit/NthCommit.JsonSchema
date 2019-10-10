@@ -9,7 +9,7 @@ module Dom =
 
     [<RequireQualifiedAccess>]
     type JsonSchemaString =
-        | Enum          of string list
+        | Enum          of Set<string>
         | Const         of string
         | Unvalidated
 

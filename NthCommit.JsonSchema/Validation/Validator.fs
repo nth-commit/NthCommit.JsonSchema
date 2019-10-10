@@ -16,7 +16,8 @@ type SchemaValueError = {
 
 [<RequireQualifiedAccess>]
 type SchemaError =
-    | Type  of SchemaTypeError
+    | Json of string
+    | Type of SchemaTypeError
     | Value of SchemaValueError
 
 module JTokenType =
@@ -31,6 +32,13 @@ module JTokenType =
         | x                     -> raise (Exception("Unhandled JTokenType: " + x.ToString()))
 
 module Validator =
+
+    module private Result =
+
+        let merge (result : Result<'a,'a>) : 'a =
+            match result with
+            | Ok x -> x
+            | Error x -> x
 
     module private List =
 
@@ -84,8 +92,8 @@ module Validator =
             Path = ctx.CurrentPath.Render()
             Value = instance.ToString() } }
 
-    let private validateInstanceInValues (instance : 'a) (values : 'a list) (ctx : JsonContext) = seq {
-        if values |> List.contains instance |> not
+    let private validateInstanceInValues (instance : 'a) (values : Set<'a>) (ctx : JsonContext) = seq {
+        if values |> Set.contains instance |> not
         then yield SchemaError.Value {
             Path = ctx.CurrentPath.Render()
             Value = instance.ToString() } }
@@ -148,12 +156,18 @@ module Validator =
         | JsonSchemaElement.Object s,    MatchedJObject i        -> yield! objectMatchesSchema s i ctx
         | _,                        _                             -> yield reportTypeMismatch schema instance ctx }
 
-    let validate (schema : JsonSchemaElement) (instance : JToken) : List<SchemaError> =
-        {   SchemaRoot = schema
-            InstanceRoot = instance
-            CurrentPath = JsonPath [] }
-        |> tokenMatchesSchema schema instance
-        |> Seq.toList
+    let private deserialize instanceJson =
+        tryDeserialize<JToken> instanceJson
+        |> Result.mapError (fun _ -> SchemaError.Json "")
 
-    let validate2 (schema : JsonSchemaElement) (instance : string) : List<SchemaError> =
-        validate schema (Newtonsoft.Json.JsonConvert.DeserializeObject<JToken> instance)
+    let validate (schema : JsonSchemaElement) (instanceJson : string) : Result<JToken, List<SchemaError>> =
+        match deserialize instanceJson with
+        | Ok instance ->
+            let ctx = {
+                SchemaRoot = schema
+                InstanceRoot = instance
+                CurrentPath = JsonPath [] }
+            match tokenMatchesSchema schema instance ctx |> Seq.toList with
+            | [] -> Ok instance
+            | list -> Error list
+        | Error e -> Error [e]

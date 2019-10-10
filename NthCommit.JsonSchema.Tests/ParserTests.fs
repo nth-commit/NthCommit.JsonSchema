@@ -87,14 +87,14 @@ let expectSchemaTypeError path expectedTypes actualType schema =
 
 module Validation =
 
-
     let makeSchemaValueError path value =
         { Path = path; Value = value }
         |> SchemaError.Value
         |> makeSchemaError
 
     let invalidJson =
-        ParserError.Json
+        SchemaError.Json ""
+        |> ParserError.Schema
         |> makeParserError
 
     [<Fact>]

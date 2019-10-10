@@ -12,7 +12,6 @@ module private JProperty =
 
 [<RequireQualifiedAccess>]
 type ParserError =
-    | Json
     | Schema of SchemaError
     | Semantic
 
@@ -79,15 +78,11 @@ module Parser =
         | MatchedJObject properties -> parseSchema properties |> Ok
         | _                         -> raiseUnhandledToken schemaToken
 
-    let private deserialize schema =
-        tryDeserialize schema
-        |> Result.mapError (fun _ -> ParserError.Json)
-
     let private META_SCHEMA = JsonSchemaElement.Object {
         Properties = [
             JsonSchemaObjectProperty.Inline (
                 "type",
-                JsonSchemaElement.String <| JsonSchemaString.Enum ["null"; "boolean"; "number"; "string"; "object"; "array"])
+                JsonSchemaElement.String <| JsonSchemaString.Enum (Set(["null"; "boolean"; "number"; "string"; "object"; "array"])))
             JsonSchemaObjectProperty.Inline (
                 "properties",
                 JsonSchemaElement.Object {
@@ -101,8 +96,6 @@ module Parser =
         AdditionalProperties = true }
 
     let parse (schema : string) : Result<JsonSchemaElement, ParserError> =
-        deserialize schema
-        |> Result.bind (fun schemaToken ->
-            match validate META_SCHEMA schemaToken with
-            | []        -> parseSchemaToken schemaToken
-            | errors    -> errors |> List.head |> ParserError.Schema |> Error)
+        match validate META_SCHEMA schema with
+        | Ok schemaToken -> parseSchemaToken schemaToken
+        | Error errors -> errors |> List.head |> ParserError.Schema |> Error

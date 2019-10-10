@@ -1,7 +1,6 @@
 ﻿namespace NthCommit.JsonSchema
 
 open System
-open Newtonsoft.Json.Linq
 
 type ValidationFailureTarget =
     | Schema    = 1
@@ -26,10 +25,13 @@ module JsonSchema =
             | ValidationFailureTarget.Instance  -> "instance"
             | _                                 -> raise (Exception ("Unhandled"))
 
+        let buildInvalidJsonMessage target =
+            sprintf "Error deserializing %s: Invalid JSON" (targetString target)
+
         let fromInvalidJson target = {
             Target  = target
             Type    = ValidationFailureType.InvalidJson
-            Message = sprintf "Error deserializing %s: Invalid JSON" (targetString target)
+            Message = buildInvalidJsonMessage target
             Path    = "" }
 
         let private buildSchemaTypeErrorMessage (error : SchemaTypeError) =
@@ -41,35 +43,37 @@ module JsonSchema =
 
         let private buildSchemaErrorMessage prefix error =
             match error with
+            | SchemaError.Json _ -> buildInvalidJsonMessage ValidationFailureTarget.Instance
             | SchemaError.Type e    -> buildSchemaTypeErrorMessage e
             | SchemaError.Value _   -> "value error"
             |> sprintf "%s: %s" prefix
 
-        let private resolveSchemeErrorPath = function
-            | SchemaError.Type e    -> e.Path
-            | SchemaError.Value e   -> e.Path
+        let private resolveSchemaErrorPath = function
+            | SchemaError.Json p -> p
+            | SchemaError.Type e -> e.Path
+            | SchemaError.Value e -> e.Path
+
+        let private resolveSchemaErrorType = function
+            | SchemaError.Json _ -> ValidationFailureType.InvalidJson
+            | SchemaError.Type _
+            | SchemaError.Value _ -> ValidationFailureType.SchemaViolation
 
         let fromSchemaError target prefix error = {
             Target  = target
-            Type    = ValidationFailureType.SchemaViolation
+            Type    = resolveSchemaErrorType error
             Message = buildSchemaErrorMessage prefix error
-            Path    = resolveSchemeErrorPath error }
+            Path    = resolveSchemaErrorPath error }
 
         let private SCHEMA_ERROR_IN_PARSING_SCHEMA =
             "Error validating schema: Schema JSON does not conform to JSON Schema Standard"
 
-        let schemaJsonInvalid = fromInvalidJson ValidationFailureTarget.Schema
-
         let schemaNotConformingToStandard =  fromSchemaError ValidationFailureTarget.Schema SCHEMA_ERROR_IN_PARSING_SCHEMA
 
         let fromParserError = function
-            | ParserError.Json                  -> schemaJsonInvalid
             | ParserError.Schema schemaError    -> schemaNotConformingToStandard schemaError
             | _ -> raise (Exception ("Unexpected error"))
 
         let private SCHEMA_ERROR_IN_INSTANCE = "Error validating instance"
-
-        let instanceJsonInvalid = fromInvalidJson ValidationFailureTarget.Instance
 
         let fromInstanceSchemaError = fromSchemaError ValidationFailureTarget.Instance SCHEMA_ERROR_IN_INSTANCE
 
@@ -78,19 +82,14 @@ module JsonSchema =
         | Ok dom    -> Ok dom
         | Error e   -> Error [ValidationFailure.fromParserError e]
 
-    let private deserializeInstance instanceJson =
-        match JsonHelper.tryDeserialize<JToken> instanceJson with
-        | Ok instanceToken  -> Ok instanceToken
-        | Error _           -> Error [ValidationFailure.instanceJsonInvalid]
+    let private validateInstance schema instanceJson =
+        match Validator.validate schema instanceJson with
+        | Ok _ -> []
+        | Error errors -> errors |> List.map ValidationFailure.fromInstanceSchemaError
 
     [<CompiledName("Validate")>]
     let validate schemaJson instanceJson =
         match parseSchema schemaJson with
-        | Ok schema ->
-            match deserializeInstance instanceJson with
-            | Ok instanceToken ->
-                Validator.validate schema instanceToken
-                |> List.map ValidationFailure.fromInstanceSchemaError
-            | Error errors -> errors
+        | Ok schema -> validateInstance schema instanceJson
         | Error errors  -> errors
         |> System.Collections.Generic.List
