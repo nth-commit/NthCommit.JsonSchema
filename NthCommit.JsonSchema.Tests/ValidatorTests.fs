@@ -31,15 +31,24 @@ module Gen =
 
         let jsonNumber = Gen.constant JsonSchemaElement.Number
 
-        let jsonEnumString =
+        let jsonEnumStringNotIntersectingWith (values : Set<string>) =
             Gen.Strings.defaultString
             |> Gen.list (Range.linear 1 20)
+            |> Gen.map (Set)
+            |> Gen.filter (Set.intersect values >> Set.count >> (=) 0)
             |> Gen.map (Set >> JsonSchemaString.Enum >> JsonSchemaElement.String)
+
+        let jsonEnumString =
+            jsonEnumStringNotIntersectingWith (Set [])
+
+        let jsonConstStringNotEqualTo value =
+            Gen.Strings.defaultString
+            |> Gen.filter ((<>) value)
+            |> Gen.map (JsonSchemaString.Const >> JsonSchemaElement.String)
 
         let jsonConstString =
             Gen.Strings.defaultString
-            |> Gen.map JsonSchemaString.Const
-            |> Gen.map JsonSchemaElement.String
+            |> Gen.map (JsonSchemaString.Const >> JsonSchemaElement.String)
 
         let jsonString =
             Gen.choice [
@@ -124,12 +133,12 @@ module Gen =
                     yield! runMutation mutator element
                     yield! recursivelyRunMutation mutator element }
 
-            let tryMutateSchema (mutator : JsonSchemaElement -> Option<Gen<JsonSchemaElement>>) (element : JsonSchemaElement) = gen {
+            let tryMutateSchema (element : JsonSchemaElement) (mutator : JsonSchemaElement -> Option<Gen<JsonSchemaElement>>) = gen {
                 let mutations = mutateElement mutator element
                 let! mutationGenerator = Gen.item mutations
                 return! mutationGenerator }
 
-            let mutateSchema (mutator : JsonSchemaElement -> Gen<JsonSchemaElement>) = tryMutateSchema (mutator >> Some)
+            let mutateSchema element mutator = tryMutateSchema element (mutator >> Some)
 
     module Instance =
 
@@ -220,7 +229,7 @@ let mutateDocumentType (schema : JsonSchemaElement) =
 let ``validation fails when type of schema doesn't match type of instance`` () =
     Property.check <| property {
         let! schema = Gen.Schema.jsonElement DEFAULT_SCHEMA_RANGE
-        let! schema' = Gen.Schema.Mutations.mutateSchema mutateDocumentType schema
+        let! schema' = Gen.Schema.Mutations.mutateSchema schema mutateDocumentType
         let! instance = Gen.Instance.json { GenerateAllProperties = true } schema'
         test <@ Validator.validate schema instance |>  Result.isError @> }
 
@@ -242,15 +251,24 @@ module Strings =
         | JsonSchemaString.Const _ -> true
         | _ -> false
 
-    let tryMutateConstStringSpec element =
-        match element with
-        | JsonSchemaElement.String spec ->
-            match spec with
-            | JsonSchemaString.Const _ ->
-                Gen.Schema.jsonConstString
-                |> Gen.filter ((<>) element)
-                |> Some
-            | _ -> None
+    let stringIsEnum = function
+    | JsonSchemaString.Enum _ -> true
+    | _ -> false
+
+    let tryMutateString (mutator : JsonSchemaString -> Option<Gen<JsonSchemaElement>>) = function
+        | JsonSchemaElement.String spec -> mutator spec
+        | _ -> None
+
+    let tryMutateConstStringSpec = function
+        | JsonSchemaString.Const value ->
+            Gen.Schema.jsonConstStringNotEqualTo value
+            |> Some
+        | _ -> None
+
+    let tryMutateEnumStringSpec = function
+        | JsonSchemaString.Enum values ->
+            Gen.Schema.jsonEnumStringNotIntersectingWith values
+            |> Some
         | _ -> None
 
     [<Fact>]
@@ -259,24 +277,13 @@ module Strings =
             let! schema =
                 Gen.Schema.jsonElement DEFAULT_SCHEMA_RANGE
                 |> Gen.filter (schemaDefinesStringWhere stringIsConst)
-            let! schema' = Gen.Schema.Mutations.tryMutateSchema tryMutateConstStringSpec schema
+
+            let! schema' =
+                tryMutateString tryMutateConstStringSpec
+                |> Gen.Schema.Mutations.tryMutateSchema schema
+
             let! instance = Gen.Instance.json { GenerateAllProperties = true } schema'
             test <@ Validator.validate schema instance |>  Result.isError @> }
-
-    let stringIsEnum = function
-        | JsonSchemaString.Enum _ -> true
-        | _ -> false
-
-    let tryMutateEnumStringSpec element =
-        match element with
-        | JsonSchemaElement.String spec ->
-            match spec with
-            | JsonSchemaString.Enum _ ->
-                Gen.Schema.jsonEnumString
-                |> Gen.filter ((<>) element)
-                |> Some
-            | _ -> None
-        | _ -> None
 
     [<Fact>]
     let ``validation fails when string is not in enum specification`` () =
@@ -284,6 +291,10 @@ module Strings =
             let! schema =
                 Gen.Schema.jsonElement DEFAULT_SCHEMA_RANGE
                 |> Gen.filter (schemaDefinesStringWhere stringIsEnum)
-            let! schema' = Gen.Schema.Mutations.tryMutateSchema tryMutateEnumStringSpec schema
+
+            let! schema' =
+                tryMutateString tryMutateEnumStringSpec
+                |> Gen.Schema.Mutations.tryMutateSchema schema
+
             let! instance = Gen.Instance.json { GenerateAllProperties = true } schema'
             test <@ Validator.validate schema instance |>  Result.isError @> }
