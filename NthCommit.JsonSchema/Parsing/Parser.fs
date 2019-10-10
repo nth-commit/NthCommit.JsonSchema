@@ -54,17 +54,17 @@ module Parser =
         match jsonPrimitiveOpt with
         | Some jsonPrimitive ->
             match jsonPrimitive with
-            | JsonPrimitive.Null    -> JsonSchemaDocument.Null
-            | JsonPrimitive.Boolean -> JsonSchemaDocument.Boolean
-            | JsonPrimitive.Number  -> JsonSchemaDocument.Number
-            | JsonPrimitive.String  -> JsonSchemaDocument.String    <| JsonString.Unvalidated
-            | JsonPrimitive.Array   -> JsonSchemaDocument.Array     <| { Items = JsonSchemaDocument.Unvalidated }
-            | JsonPrimitive.Object  -> JsonSchemaDocument.Object    <| {
+            | JsonPrimitive.Null    -> JsonSchemaElement.Null
+            | JsonPrimitive.Boolean -> JsonSchemaElement.Boolean
+            | JsonPrimitive.Number  -> JsonSchemaElement.Number
+            | JsonPrimitive.String  -> JsonSchemaElement.String    <| JsonSchemaString.Unvalidated
+            | JsonPrimitive.Array   -> JsonSchemaElement.Array     <| { Items = JsonSchemaElement.Unvalidated }
+            | JsonPrimitive.Object  -> JsonSchemaElement.Object    <| {
                 Properties = []
                 PatternProperties = []
                 Required = []
                 AdditionalProperties = true }
-        | None -> JsonSchemaDocument.Unvalidated
+        | None -> JsonSchemaElement.Unvalidated
 
     let private parseSchema (properties : JProperty list) =
         let propertiesByName = keyPropertiesByName properties
@@ -74,7 +74,7 @@ module Parser =
         |> Option.map parseType
         |> makeSchema
 
-    let private parseSchemaToken schemaToken : Result<JsonSchemaDocument, ParserError> =
+    let private parseSchemaToken schemaToken : Result<JsonSchemaElement, ParserError> =
         match matchJToken schemaToken with
         | MatchedJObject properties -> parseSchema properties |> Ok
         | _                         -> raiseUnhandledToken schemaToken
@@ -83,24 +83,24 @@ module Parser =
         tryDeserialize schema
         |> Result.mapError (fun _ -> ParserError.Json)
 
-    let private META_SCHEMA = JsonSchemaDocument.Object {
+    let private META_SCHEMA = JsonSchemaElement.Object {
         Properties = [
-            JsonObjectProperty.Inline (
+            JsonSchemaObjectProperty.Inline (
                 "type",
-                JsonSchemaDocument.String <| JsonString.Enum ["null"; "boolean"; "number"; "string"; "object"; "array"])
-            JsonObjectProperty.Inline (
+                JsonSchemaElement.String <| JsonSchemaString.Enum ["null"; "boolean"; "number"; "string"; "object"; "array"])
+            JsonSchemaObjectProperty.Inline (
                 "properties",
-                JsonSchemaDocument.Object {
+                JsonSchemaElement.Object {
                     Properties = []
                     PatternProperties = [
-                        (Regex ".*", JsonObjectProperty.Reference <| JsonReference "#") ]
+                        (Regex ".*", JsonSchemaObjectProperty.Reference <| JsonReference "#") ]
                     Required = []
                     AdditionalProperties = true })]
         PatternProperties = []
         Required = []
         AdditionalProperties = true }
 
-    let parse (schema : string) : Result<JsonSchemaDocument, ParserError> =
+    let parse (schema : string) : Result<JsonSchemaElement, ParserError> =
         deserialize schema
         |> Result.bind (fun schemaToken ->
             match validate META_SCHEMA schemaToken with

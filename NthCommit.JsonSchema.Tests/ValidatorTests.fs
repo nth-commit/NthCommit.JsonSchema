@@ -18,43 +18,73 @@ module Gen =
 
     module Schema =
 
-        let jsonNull = Gen.constant JsonSchemaDocument.Null
+        let jsonNull = Gen.constant JsonSchemaElement.Null
 
-        let jsonNumber = Gen.constant JsonSchemaDocument.Number
+        let jsonNumber = Gen.constant JsonSchemaElement.Number
 
         let jsonString range =
             Gen.choice [
-                Gen.Strings.defaultString |> Gen.list range |> Gen.map JsonString.Enum
-                Gen.Strings.defaultString |> Gen.map JsonString.Const 
-                Gen.constant JsonString.Unvalidated ]
-            |> Gen.map JsonSchemaDocument.String
+                Gen.Strings.defaultString |> Gen.list range |> Gen.map JsonSchemaString.Enum
+                Gen.Strings.defaultString |> Gen.map JsonSchemaString.Const 
+                Gen.constant JsonSchemaString.Unvalidated ]
+            |> Gen.map JsonSchemaElement.String
 
         let jsonObjectInlineProperty jsonSchemaDocument = gen {
             let! propertyName = Gen.Strings.camelCaseWord
             let! propertyValue = jsonSchemaDocument
-            return JsonObjectProperty.Inline (propertyName, propertyValue) }
+            return JsonSchemaObjectProperty.Inline (propertyName, propertyValue) }
 
         let jsonObjectProperty jsonSchemaDocument =
             Gen.choice [
                 jsonObjectInlineProperty jsonSchemaDocument ]
 
-        let jsonObject jsonDocument degree depth = gen {
+        let jsonObject jsonElement (degree, depth) = gen {
             let nextDepth = Range.decrement depth
-            let jsonDocument' = jsonDocument degree nextDepth
+            let jsonElement' = jsonElement (degree, nextDepth)
 
-            let! properties = jsonObjectProperty jsonDocument' |> Gen.list degree
+            let! properties = jsonObjectProperty jsonElement' |> Gen.list degree
     
-            return JsonSchemaDocument.Object {
+            return JsonSchemaElement.Object {
                 Properties = properties
                 PatternProperties = []
                 Required = []
                 AdditionalProperties = true } }
 
-        let rec jsonDocument degree depth : Gen<JsonSchemaDocument> = Gen.choice [
+        let rec jsonElement (degree, depth) : Gen<JsonSchemaElement> = Gen.choice [
             jsonNull
             jsonNumber
             jsonString (Range.linear 1 20)
-            jsonObject jsonDocument degree depth ]
+            jsonObject jsonElement (degree, depth) ]
+
+        let jsonElementOfType (degree, depth) primitive =
+            jsonElement (degree, depth)
+            |> Gen.filter (fun x -> x.Primitive = primitive)
+
+        let jsonElementNotOfType (degree, depth) primitive =
+            jsonElement (degree, depth)
+            |> Gen.filter (fun x -> x.Primitive <> primitive)
+
+        module Mutations =
+
+            let collectJsonElementMutations
+                (element : JsonSchemaElement)
+                (mutator : JsonSchemaElement -> Option<Gen<JsonSchemaElement>>) : seq<Gen<JsonSchemaElement>> = seq {
+                    match mutator element with
+                    | Some mutation -> yield mutation
+                    | None _ -> yield! Seq.empty }
+
+            let tryMutateJsonElement (element : JsonSchemaElement) (mutator : JsonSchemaElement -> Option<Gen<JsonSchemaElement>>) = gen {
+                let mutations = collectJsonElementMutations element mutator
+                if Seq.isEmpty mutations
+                then return None
+                else
+                    let! mutationGenerator = Gen.item mutations
+                    let! mutation = mutationGenerator
+                    return mutation |> Some }
+
+            let mutateJsonElement (element : JsonSchemaElement) (mutator : JsonSchemaElement -> Gen<JsonSchemaElement>) =
+                tryMutateJsonElement element (mutator >> Some)
+                |> Gen.map Option.get
 
     module Instance =
 
@@ -85,14 +115,14 @@ module Gen =
             Gen.int (Range.linear -1000 1000)
             |> Gen.map createJValue
 
-        let private jsonString (spec : JsonString) =
+        let private jsonString (spec : JsonSchemaString) =
             match spec with
-            | JsonString.Const str -> Gen.constant str
-            | JsonString.Enum values -> Gen.item values
-            | JsonString.Unvalidated -> Gen.Strings.defaultString
+            | JsonSchemaString.Const str -> Gen.constant str
+            | JsonSchemaString.Enum values -> Gen.item values
+            | JsonSchemaString.Unvalidated -> Gen.Strings.defaultString
             |> Gen.map createJValue
 
-        let private jsonProperty (json : JsonSchemaDocument -> Gen<JToken>) (spec : JsonObjectProperty) : Gen<JProperty> = gen {
+        let private jsonProperty (json : JsonSchemaElement -> Gen<JToken>) (spec : JsonSchemaObjectProperty) : Gen<JProperty> = gen {
             match spec with
             | Inline (propertyName, schema) ->
                 let! propertyValue = json schema
@@ -101,7 +131,7 @@ module Gen =
                 raise (Exception("unhandled"))
                 return JProperty(null) }
 
-        let private jsonObject json (spec : JsonObject) : Gen<JToken> = gen {
+        let private jsonObject json (spec : JsonSchemaObject) : Gen<JToken> = gen {
             let! propertySpecs =
                 spec.Properties |> manyOrNoItems
             let! properties =
@@ -110,17 +140,34 @@ module Gen =
                 |> concat
             return JObject(properties) :> JToken }
 
-        let rec json (schema : JsonSchemaDocument) : Gen<JToken> =
+        let rec json (schema : JsonSchemaElement) : Gen<JToken> =
             match schema with
-            | JsonSchemaDocument.Null -> createJValue null |> Gen.constant
-            | JsonSchemaDocument.Number -> jsonNumber
-            | JsonSchemaDocument.String spec -> jsonString spec
-            | JsonSchemaDocument.Object spec -> jsonObject json spec
+            | JsonSchemaElement.Null -> createJValue null |> Gen.constant
+            | JsonSchemaElement.Number -> jsonNumber
+            | JsonSchemaElement.String spec -> jsonString spec
+            | JsonSchemaElement.Object spec -> jsonObject json spec
             | _ -> raise (Exception ("Unhandled"))
 
+let DEFAULT_SCHEMA_RANGE = ((Range.linear 0 10), (Range.linear 1 5))
+
 [<Fact>]
-let ``test can generate a valid json instance`` () =
-    Property.check <| property {
-        let! schema = Gen.Schema.jsonDocument (Range.linear 0 10) (Range.linear 1 5)
+let ``PREMISE: test can generate a valid json instance`` () =
+    Property.check' 10<tests> <| property {
+        let! schema = Gen.Schema.jsonElement DEFAULT_SCHEMA_RANGE
         let! instance = Gen.Instance.json schema
         test <@ Validator.validate schema instance |> List.isEmpty @> }
+
+let tryNullifyDocumentType = function
+    | JsonSchemaElement.Null -> None
+    | _ -> JsonSchemaElement.Null |> Gen.constant |> Some
+
+let mutateDocumentType (schema : JsonSchemaElement) =
+    Gen.Schema.jsonElementNotOfType DEFAULT_SCHEMA_RANGE schema.Primitive
+
+[<Fact>]
+let ``validates when type of schema doesn't match type of instance`` () =
+    Property.check' 10<tests> <| property {
+        let! schema = Gen.Schema.jsonElement DEFAULT_SCHEMA_RANGE
+        let! schema' = Gen.Schema.Mutations.mutateJsonElement schema mutateDocumentType
+        let! instance = Gen.Instance.json schema'
+        test <@ Validator.validate schema instance |> List.isEmpty |> not @> }

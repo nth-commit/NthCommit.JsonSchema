@@ -8,19 +8,19 @@ module Dom =
     type JsonReference = JsonReference of string
 
     [<RequireQualifiedAccess>]
-    type JsonString =
+    type JsonSchemaString =
         | Enum          of string list
         | Const         of string
         | Unvalidated
 
-    type JsonObject = {
-        Properties              : JsonObjectProperty list
-        PatternProperties       : (Regex * JsonObjectProperty) list
+    type JsonSchemaObject = {
+        Properties              : JsonSchemaObjectProperty list
+        PatternProperties       : (Regex * JsonSchemaObjectProperty) list
         Required                : string list
         AdditionalProperties    : bool }
 
-    and JsonObjectProperty =
-        | Inline    of (string * JsonSchemaDocument)
+    and JsonSchemaObjectProperty =
+        | Inline    of (string * JsonSchemaElement)
         | Reference of JsonReference
 
         member this.Name =
@@ -28,16 +28,16 @@ module Dom =
             | Inline (name, _)      -> name
             | Reference _           -> "$ref"
 
-    and JsonArray = {
-        Items : JsonSchemaDocument }
+    and JsonSchemaArray = {
+        Items : JsonSchemaElement }
 
-    and JsonSchemaDocument =
+    and JsonSchemaElement =
         | Null
         | Number
         | Boolean
-        | String        of JsonString
-        | Object        of JsonObject
-        | Array         of JsonArray
+        | String        of JsonSchemaString
+        | Object        of JsonSchemaObject
+        | Array         of JsonSchemaArray
         | Unvalidated
 
         member this.Primitive =
