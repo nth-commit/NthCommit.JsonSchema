@@ -28,7 +28,7 @@ let trivialObjectSchema =
     JsonSchemaElement.Object {
         Properties              = []
         PatternProperties       = []
-        Required                = []
+        Required                = Set []
         AdditionalProperties    = true }
 
 module JToken =

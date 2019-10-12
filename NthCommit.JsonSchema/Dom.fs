@@ -16,7 +16,7 @@ module Dom =
     type JsonSchemaObject = {
         Properties              : JsonSchemaObjectProperty list
         PatternProperties       : (Regex * JsonSchemaObjectProperty) list
-        Required                : string list
+        Required                : Set<string>
         AdditionalProperties    : bool }
 
     and JsonSchemaObjectProperty =

@@ -9,14 +9,35 @@ open NthCommit.JsonSchema.Dom
 open Newtonsoft.Json.Linq
 open FSharpx.Collections
 
-module private Result =
+module JsonSchemaElement =
 
-    let isOk result =
-        match result with
-        | Ok _ -> true
-        | Error _ -> false
+    let rec private mapPropertySchemas (f : JsonSchemaElement -> JsonSchemaElement) = function
+        | JsonSchemaObjectProperty.Inline (name, schema) ->
+            JsonSchemaObjectProperty.Inline (name, map f schema)
+        | x -> x
 
-    let isError = isOk >> not
+    and private mapObjectSchemas (f : JsonSchemaElement -> JsonSchemaElement) (x : JsonSchemaObject) =
+        { x with
+            Properties = List.map (mapPropertySchemas f) x.Properties } : JsonSchemaObject
+
+    and private mapArraySchemas (f : JsonSchemaElement -> JsonSchemaElement) (x : JsonSchemaArray) =
+        { x with
+            Items = f x.Items } : JsonSchemaArray
+
+    and map (f : JsonSchemaElement -> JsonSchemaElement) x =
+        match f x with
+        | JsonSchemaElement.Object x ->
+            mapObjectSchemas f x |> JsonSchemaElement.Object
+        | JsonSchemaElement.Array x ->
+            mapArraySchemas f x |> JsonSchemaElement.Array
+        | x -> x
+
+    let mapObjects (f : JsonSchemaObject -> JsonSchemaObject) = map (function
+        | JsonSchemaElement.Object x -> f x |> JsonSchemaElement.Object
+        | x -> x)
+
+let private allPropertiesAreRequired (spec : JsonSchemaObject) =
+    { spec with Required = spec.Properties |> List.map (fun p -> p.Name) |> Set }
 
 module Gen =
 
@@ -55,33 +76,6 @@ module Gen =
         let! desiredLength = Gen.int (Range.linear 0 (list |> List.length))
         let! shuffled = shuffle list
         return shuffled |> List.take desiredLength }
-
-    let control (f : unit -> 'a) : Gen<'a> =
-        Random (fun _ _ ->
-            let next = f ()
-            Node (next, LazyList.empty))
-        |> Gen.ofRandom
-
-    let ofSequence (source : 'a seq) : Gen<'a> =
-        let enumerator = source.GetEnumerator()
-        control (fun _ ->
-            enumerator.MoveNext() |> ignore
-            enumerator.Current)
-
-    let indexed (g : Gen<'a>) : Gen<int * 'a> =
-        let indexGenerator =
-            Seq.initInfinite id
-            |> ofSequence
-        Gen.map2 (fun i x -> (i, x)) indexGenerator g
-
-    let filterConstrained (p : 'a -> bool) (g : Gen<'a>) : Gen<'a> =
-        let MAX_ITERATIONS = 100000
-        indexed g
-        |> Gen.map (fun (i, x) ->
-            if i > 10
-            then raise (Exception (sprintf "Gen.filterConstrained exhausted after %i attempts" MAX_ITERATIONS))
-            else x)
-        |> Gen.filter p
 
     module private Range =
 
@@ -141,6 +135,7 @@ module Gen =
                 properties
                 |> List.map (fun p -> p.Name)
                 |> manyOrNoItems
+                |> Gen.map Set
     
             return JsonSchemaElement.Object {
                 Properties = properties
@@ -204,17 +199,14 @@ module Gen =
                     yield! runMutation mutator element
                     yield! recursivelyRunMutation mutator element }
 
-            let tryMutateSchema (element : JsonSchemaElement) (mutator : JsonSchemaElement -> Option<Gen<JsonSchemaElement>>) = gen {
+            let tryMutateSchema (mutator : JsonSchemaElement -> Option<Gen<JsonSchemaElement>>) (element : JsonSchemaElement) = gen {
                 let mutations = mutateElement mutator element
-                let! mutationGenerator = Gen.item mutations
-                return! mutationGenerator }
+                let! mutationGenerator = Gen.item mutations |> Gen.noShrink
+                return! mutationGenerator |> Gen.noShrink }
 
-            let mutateSchema element mutator = tryMutateSchema element (mutator >> Some)
+            let mutateSchema mutator element = tryMutateSchema (mutator >> Some) element |> Gen.noShrink
 
     module Instance =
-
-        type InstanceGenOptions = {
-            GenerateAllProperties : bool }
 
         let rec private concat (gens : List<Gen<'a>>) : Gen<List<'a>> = gen {
             match gens with
@@ -246,39 +238,46 @@ module Gen =
                 raise (Exception("unhandled"))
                 return JProperty(null) }
 
-        let private jsonObject json (options : InstanceGenOptions) (spec : JsonSchemaObject) : Gen<JToken> = gen {
-            let! propertySpecs =
-                if options.GenerateAllProperties
-                then spec.Properties |> shuffle
-                else spec.Properties |> manyOrNoItems
+        let private pickProperties (spec : JsonSchemaObject) : Gen<List<JsonSchemaObjectProperty>> =
+            let (required, unrequired) =
+                spec.Properties
+                |> List.partition (fun p -> spec.Required |> Set.contains p.Name)
+            Gen.map2
+                (@)
+                (required |> shuffle)
+                (unrequired |> manyOrNoItems)
+
+        let private jsonObject json (spec : JsonSchemaObject) : Gen<JToken> = gen {
+            let! propertySpecs = pickProperties spec
             let! properties =
                 propertySpecs
                 |> List.map (jsonProperty json)
                 |> concat
             return JObject(properties) :> JToken }
 
-        let rec private jsonElement (options : InstanceGenOptions) (schema : JsonSchemaElement) : Gen<JToken> =
+        let rec private jsonElement (schema : JsonSchemaElement) : Gen<JToken> =
             match schema with
             | JsonSchemaElement.Null -> createJValue null |> Gen.constant
             | JsonSchemaElement.Number -> jsonNumber
             | JsonSchemaElement.String spec -> jsonString spec
-            | JsonSchemaElement.Object spec -> jsonObject (jsonElement options) (options) spec
+            | JsonSchemaElement.Object spec -> jsonObject jsonElement spec
             | _ -> raise (Exception ("Unhandled"))
 
-        let json options schema = jsonElement options schema |> Gen.Json.serialize
-
-        let jsonDefault = json { GenerateAllProperties = false }
-
-open Gen.Instance
+        let json schema = jsonElement schema |> Gen.Json.serialize
 
 let DEFAULT_SCHEMA_RANGE = ((Range.constant 0 6), (Range.linear 1 6))
+
+let validate schema instance =
+    match Validator.validate schema instance with
+    | Ok _ -> []
+    | Error errors -> errors
 
 [<Fact>]
 let ``premise: test can generate a valid json instance`` () =
     Property.check <| property {
         let! schema = Gen.Schema.jsonElement DEFAULT_SCHEMA_RANGE
-        let! instance = Gen.Instance.jsonDefault schema
-        test <@ Validator.validate schema instance |> Result.isOk @> }
+        let! instance = Gen.Instance.json schema
+        test <@ validate schema instance |> List.isEmpty @> }
 
 let mutateDocumentType (schema : JsonSchemaElement) =
     Gen.Schema.jsonElementNotOfType DEFAULT_SCHEMA_RANGE schema.Primitive
@@ -286,18 +285,26 @@ let mutateDocumentType (schema : JsonSchemaElement) =
 [<Fact>]
 let ``validation fails when type of schema doesn't match type of instance`` () =
     Property.check <| property {
-        let! schema = Gen.Schema.jsonElement DEFAULT_SCHEMA_RANGE
-        let! schema' = Gen.Schema.Mutations.mutateSchema schema mutateDocumentType
-        let! instance = Gen.Instance.json { GenerateAllProperties = true } schema'
-        test <@ Validator.validate schema instance |>  Result.isError @> }
+        let! schema =
+            Gen.Schema.jsonElement DEFAULT_SCHEMA_RANGE
+            |> Gen.map (JsonSchemaElement.mapObjects allPropertiesAreRequired)
+
+        let! schema' =
+            schema
+            |> Gen.Schema.Mutations.mutateSchema mutateDocumentType
+
+        let! instance = Gen.Instance.json schema'
+        test <@ validate schema instance <> [] @> }
 
 module Strings =
 
-    let propertyContainsSchemaWhere (predicate : JsonSchemaElement -> bool) = function
+    let propertyContainsSchemaWhere (predicate : JsonSchemaElement -> bool) =
+        function
         | Inline (_, schema) -> predicate schema
         | Reference _ -> false // The reference should be traversed elsewhere
 
-    let rec schemaDefinesStringWhere (predicate : JsonSchemaString -> bool) = function
+    let rec schemaDefinesStringWhere (predicate : JsonSchemaString -> bool) =
+        function
         | JsonSchemaElement.String spec -> predicate spec
         | JsonSchemaElement.Object spec ->
             spec.Properties
@@ -313,17 +320,17 @@ module Strings =
         | JsonSchemaString.Enum _ -> true
         | _ -> false
 
-    let tryMutateString (mutator : JsonSchemaString -> Option<Gen<JsonSchemaElement>>) = function
+    let mutateStringSuchThat (mutator : JsonSchemaString -> Option<Gen<JsonSchemaElement>>) = function
         | JsonSchemaElement.String spec -> mutator spec
         | _ -> None
 
-    let tryMutateConstStringSpec = function
+    let constStringValueIsReplaced = function
         | JsonSchemaString.Const value ->
             Gen.Schema.jsonConstStringNotEqualTo value
             |> Some
         | _ -> None
 
-    let tryMutateEnumStringSpec = function
+    let enumStringValuesAreReplaced = function
         | JsonSchemaString.Enum values ->
             Gen.Schema.jsonEnumStringNotIntersectingWith values
             |> Some
@@ -335,13 +342,14 @@ module Strings =
             let! schema =
                 Gen.Schema.jsonElement DEFAULT_SCHEMA_RANGE
                 |> Gen.filter (schemaDefinesStringWhere stringIsConst)
+                |> Gen.map (JsonSchemaElement.mapObjects allPropertiesAreRequired)
 
             let! schema' =
-                tryMutateString tryMutateConstStringSpec
-                |> Gen.Schema.Mutations.tryMutateSchema schema
+                schema
+                |> Gen.Schema.Mutations.tryMutateSchema (mutateStringSuchThat constStringValueIsReplaced)
 
-            let! instance = Gen.Instance.json { GenerateAllProperties = true } schema'
-            test <@ Validator.validate schema instance |>  Result.isError @> }
+            let! instance = Gen.Instance.json schema'
+            test <@ validate schema instance <> [] @> }
 
     [<Fact>]
     let ``validation fails when string is not in enum specification`` () =
@@ -349,38 +357,11 @@ module Strings =
             let! schema =
                 Gen.Schema.jsonElement DEFAULT_SCHEMA_RANGE
                 |> Gen.filter (schemaDefinesStringWhere stringIsEnum)
+                |> Gen.map (JsonSchemaElement.mapObjects allPropertiesAreRequired)
 
             let! schema' =
-                tryMutateString tryMutateEnumStringSpec
-                |> Gen.Schema.Mutations.tryMutateSchema schema
+                schema
+                |> Gen.Schema.Mutations.tryMutateSchema (mutateStringSuchThat enumStringValuesAreReplaced)
 
-            let! instance = Gen.Instance.json { GenerateAllProperties = true } schema'
-            test <@ Validator.validate schema instance |>  Result.isError @> }
-
-module Objects =
-
-    let propertyContainsSchemaWhere (predicate : JsonSchemaElement -> bool) = function
-        | Inline (_, schema) -> predicate schema
-        | Reference _ -> false // The reference should be traversed elsewhere
-
-    let rec schemaDefinesObjectWhere (predicate : JsonSchemaObject -> bool) = function
-        | JsonSchemaElement.Object spec ->
-            predicate spec
-            |> (||) (
-                spec.Properties
-                |> List.map (propertyContainsSchemaWhere <| schemaDefinesObjectWhere predicate)
-                |> List.exists id)
-        | _ -> false
-
-    let objectHasRequiredProperty (spec : JsonSchemaObject) =
-        spec.Required
-        |> (not << List.isEmpty)
-
-    [<Fact>]
-    let ``validation fails when a required property is missing`` () =
-        Property.check <| property {
-            let! schema =
-                Gen.Schema.jsonObject DEFAULT_SCHEMA_RANGE
-                |> Gen.filterConstrained (schemaDefinesObjectWhere objectHasRequiredProperty)
-
-            () }
+            let! instance = Gen.Instance.json schema'
+            test <@ validate schema instance <> [] @> }

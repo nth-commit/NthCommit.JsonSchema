@@ -61,7 +61,7 @@ module Parser =
             | JsonPrimitive.Object  -> JsonSchemaElement.Object    <| {
                 Properties = []
                 PatternProperties = []
-                Required = []
+                Required = Set []
                 AdditionalProperties = true }
         | None -> JsonSchemaElement.Unvalidated
 
@@ -89,10 +89,10 @@ module Parser =
                     Properties = []
                     PatternProperties = [
                         (Regex ".*", JsonSchemaObjectProperty.Reference <| JsonReference "#") ]
-                    Required = []
+                    Required = Set []
                     AdditionalProperties = true })]
         PatternProperties = []
-        Required = []
+        Required = Set []
         AdditionalProperties = true }
 
     let parse (schema : string) : Result<JsonSchemaElement, ParserError> =
