@@ -36,6 +36,28 @@ module JsonSchemaElement =
         | JsonSchemaElement.Object x -> f x |> JsonSchemaElement.Object
         | x -> x)
 
+    let rec private existsInProperty (predicate : JsonSchemaElement -> bool) = function
+        | JsonSchemaObjectProperty.Inline (_, schema) -> exists predicate schema
+        | _ -> false
+
+    and private existsInObject (predicate : JsonSchemaElement -> bool) (spec : JsonSchemaObject) =
+        List.exists (existsInProperty predicate) spec.Properties
+
+    and private existsInArray (predicate : JsonSchemaElement -> bool) (spec : JsonSchemaArray) =
+        predicate spec.Items
+
+    and private existsNested (predicate : JsonSchemaElement -> bool) = function
+        | JsonSchemaElement.Object spec -> existsInObject predicate spec
+        | JsonSchemaElement.Array spec -> existsInArray predicate spec
+        | _ -> false
+
+    and exists (predicate : JsonSchemaElement -> bool) (element : JsonSchemaElement) =
+        predicate element || existsNested predicate element : bool
+
+    let stringExists (predicate : JsonSchemaString -> bool) = exists (function
+        | JsonSchemaElement.String spec -> predicate spec
+        | _ -> false)
+
 let private allPropertiesAreRequired (spec : JsonSchemaObject) =
     { spec with Required = spec.Properties |> List.map (fun p -> p.Name) |> Set }
 
@@ -298,20 +320,6 @@ let ``validation fails when type of schema doesn't match type of instance`` () =
 
 module Strings =
 
-    let propertyContainsSchemaWhere (predicate : JsonSchemaElement -> bool) =
-        function
-        | Inline (_, schema) -> predicate schema
-        | Reference _ -> false // The reference should be traversed elsewhere
-
-    let rec schemaDefinesStringWhere (predicate : JsonSchemaString -> bool) =
-        function
-        | JsonSchemaElement.String spec -> predicate spec
-        | JsonSchemaElement.Object spec ->
-            spec.Properties
-            |> List.map (propertyContainsSchemaWhere <| schemaDefinesStringWhere predicate)
-            |> List.exists id
-        | _ -> false
-
     let stringIsConst = function
         | JsonSchemaString.Const _ -> true
         | _ -> false
@@ -341,7 +349,7 @@ module Strings =
         Property.check <| property {
             let! schema =
                 Gen.Schema.jsonElement DEFAULT_SCHEMA_RANGE
-                |> Gen.filter (schemaDefinesStringWhere stringIsConst)
+                |> Gen.filter (JsonSchemaElement.stringExists stringIsConst)
                 |> Gen.map (JsonSchemaElement.mapObjects allPropertiesAreRequired)
 
             let! schema' =
@@ -356,7 +364,7 @@ module Strings =
         Property.check <| property {
             let! schema =
                 Gen.Schema.jsonElement DEFAULT_SCHEMA_RANGE
-                |> Gen.filter (schemaDefinesStringWhere stringIsEnum)
+                |> Gen.filter (JsonSchemaElement.stringExists stringIsEnum)
                 |> Gen.map (JsonSchemaElement.mapObjects allPropertiesAreRequired)
 
             let! schema' =

@@ -33,13 +33,6 @@ module JTokenType =
 
 module Validator =
 
-    module private Result =
-
-        let merge (result : Result<'a,'a>) : 'a =
-            match result with
-            | Ok x -> x
-            | Error x -> x
-
     module private List =
 
         let toMap keyProjection list =
@@ -100,9 +93,9 @@ module Validator =
 
     let private stringMatchesSchema (schema : JsonSchemaString) (instance : string) (ctx : JsonContext) : seq<SchemaError> =
         match schema with
-        | JsonSchemaString.Unvalidated  -> Seq.empty
-        | JsonSchemaString.Const value  -> validateInstanceIsValue instance value ctx
-        | JsonSchemaString.Enum values  -> validateInstanceInValues instance values ctx
+        | JsonSchemaString.Const value -> validateInstanceIsValue instance value ctx
+        | JsonSchemaString.Enum values -> validateInstanceInValues instance values ctx
+        | JsonSchemaString.Unvalidated -> Seq.empty
 
     let private evaluateReference (JsonReference reference) (ctx : JsonContext) : JsonSchemaElement =
         match reference with
