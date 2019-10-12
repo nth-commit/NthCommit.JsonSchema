@@ -5,6 +5,8 @@ open System
 
 module Dom =
 
+    type RegularExpression = RegularExpression of string
+
     type JsonReference = JsonReference of string
 
     [<RequireQualifiedAccess>]
@@ -15,7 +17,7 @@ module Dom =
 
     type JsonObjectSchema = {
         Properties : JsonPropertySchema list
-        PatternProperties : (Regex * JsonPropertySchema) list
+        PatternProperties : (RegularExpression * JsonPropertySchema list) list
         Required : Set<string>
         AdditionalProperties : bool }
 

@@ -4,6 +4,7 @@ open System
 open Newtonsoft.Json.Linq
 open NthCommit.JsonSchema.Dom
 open NthCommit.JsonSchema.JsonHelper
+open System.Text.RegularExpressions
 
 type SchemaTypeError = {
     Path            : string
@@ -140,8 +141,8 @@ module Validator =
 
         let getPropertySchemasByPattern (propertyInstance : JProperty) : JsonElementSchema list =
             objectSchema.PatternProperties
-            |> List.filter (fun (regex, _) -> regex.IsMatch(propertyInstance.Name))
-            |> List.map (fun (_, s) -> getPropertySchema s ctx)
+            |> List.filter (fun ((RegularExpression pattern), _) -> Regex(pattern).IsMatch(propertyInstance.Name))
+            |> List.map (fun (_, s) -> getPropertySchema (s |> List.head) ctx) // TODO: List.head...
 
         let getPropertySchemas (propertyInstance : JProperty) =
             List.concat [
@@ -180,7 +181,7 @@ module Validator =
                 SchemaRoot = schema
                 InstanceRoot = instance
                 CurrentPath = JsonPath [] }
-            match tokenMatchesSchema schema instance ctx |> Seq.toList with
+            match elementMatchesSchema schema instance ctx |> Seq.toList with
             | [] -> Ok instance
             | list -> Error list
         | Error e -> Error [e]

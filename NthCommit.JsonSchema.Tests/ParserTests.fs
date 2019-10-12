@@ -10,6 +10,19 @@ open Newtonsoft.Json
 open Newtonsoft.Json.Linq
 open System
 
+let raiseArrogantException () =
+    raise (Exception ("No way will this fail"))
+
+let parseArrogantly schemaJson =
+    match parse schemaJson with
+    | Ok schema -> schema
+    | Error _ -> raiseArrogantException ()
+
+let parseObjectArrogantly schemaJson =
+    match parseArrogantly schemaJson with
+    | JsonElementSchema.Object objectSchema -> objectSchema
+    | _ -> raiseArrogantException ()
+
 let primitiveNames = ["null"; "string"; "number"; "boolean"; "array"; "object"]
 
 let trivialNullSchema = JsonElementSchema.Null
@@ -24,7 +37,7 @@ let trivialStringSchema =
 let trivialArraySchema =
     JsonElementSchema.Array { Items = JsonElementSchema.Unvalidated }
 
-let trivialObjectSchema =
+let defaultObjectSchema =
     JsonElementSchema.Object {
         Properties              = []
         PatternProperties       = []
@@ -65,7 +78,7 @@ let ``parses schema of given "type"`` () =
         | "number"  -> <@ trivialNumberSchema   |> Ok = parse schema @>
         | "string"  -> <@ trivialStringSchema   |> Ok = parse schema @>
         | "array"   -> <@ trivialArraySchema    |> Ok = parse schema @>
-        | "object"  -> <@ trivialObjectSchema   |> Ok = parse schema @>
+        | "object"  -> <@ defaultObjectSchema   |> Ok = parse schema @>
         | x         -> <@ x <> x @> // We must have an unhandled primitive
         |> test }
 
@@ -126,18 +139,51 @@ module Validation =
             let schema = sprintf @"{ ""type"": ""%s"" }" typeValue
             makeSchemaValueError "type" typeValue =! parse schema }
 
-module Object = 
+module Object =
+
+    module Gen =
+
+        let rudimentarySchema =
+            primitiveNames
+            |> Gen.item
+            |> Gen.map (sprintf @"{ ""type"": ""%s"" }")
+
+        let x = 0
 
     [<Fact>]
-    let ``parses rudimentary object schema with properties`` () =
+    let ``rudimentary object schema returns correct defaults`` () =
+        let schema = @"{ ""type"": ""object"" }"
+        test <@ defaultObjectSchema = parseArrogantly schema @>
+
+    [<Fact(Skip = "TODO")>]
+    let ``parses object schema with properties set`` () =
         Property.check <| property {
-            let! schema =
+            let! propertyName = Gen.Strings.camelCaseWord
+            let! propertySchema = Gen.rudimentarySchema
+            let schema =
+                sprintf
+                    @"{
+                        ""type"": ""object"",
+                        ""properties"": {
+                            ""%s"": %s
+                        }
+                    }"
+                    propertyName
+                    propertySchema
+            test <@ (parseObjectArrogantly schema).Properties
+                    |> List.exactlyOne
+                    |> (fun p -> p.Name = propertyName) @> }
+
+    [<Fact>]
+    let ``parses object schema with additionalProperties set`` () =
+        Property.check <| property {
+            let! additionalProperties = Gen.bool
+            let schema =
                 @"{
                     ""type"": ""object"",
-                    ""properties"": {}
+                    ""additionalProperties"": " + additionalProperties.ToString().ToLower() + @"
                 }"
-                |> Gen.Json.maybeAdditive
-            test <@ Ok <| trivialObjectSchema = parse schema @> }
+            test <@ Ok <| defaultObjectSchema = parse schema @> }
 
     module Validation =
 

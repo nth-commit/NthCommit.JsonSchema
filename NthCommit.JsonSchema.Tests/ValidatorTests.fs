@@ -9,11 +9,11 @@ open NthCommit.JsonSchema.Dom
 open Newtonsoft.Json.Linq
 open FSharpx.Collections
 
-module JsonSchemaElement =
+module JsonElementSchema =
 
     let rec private mapPropertySchemas (f : JsonElementSchema -> JsonElementSchema) = function
         | JsonPropertySchema.Inline (name, schema) ->
-            JsonPropertySchema.Inline (name, map f schema)
+            JsonPropertySchema.Inline (name, mapElements f schema)
         | x -> x
 
     and private mapObjectSchemas (f : JsonElementSchema -> JsonElementSchema) (x : JsonObjectSchema) =
@@ -24,7 +24,7 @@ module JsonSchemaElement =
         { x with
             Items = f x.Items } : JsonArraySchema
 
-    and map (f : JsonElementSchema -> JsonElementSchema) x =
+    and mapElements (f : JsonElementSchema -> JsonElementSchema) x =
         match f x with
         | JsonElementSchema.Object x ->
             mapObjectSchemas f x |> JsonElementSchema.Object
@@ -32,7 +32,7 @@ module JsonSchemaElement =
             mapArraySchemas f x |> JsonElementSchema.Array
         | x -> x
 
-    let mapObjects (f : JsonObjectSchema -> JsonObjectSchema) = map (function
+    let mapObjects (f : JsonObjectSchema -> JsonObjectSchema) = mapElements (function
         | JsonElementSchema.Object x -> f x |> JsonElementSchema.Object
         | x -> x)
 
@@ -64,121 +64,7 @@ module JsonSchemaElement =
 
 module Gen =
 
-    let rec private listDistinctByInternal
-        (projection : 'a -> 'b)
-        (length : int)
-        (generator : Gen<'a>)
-        (prevResults : 'a list) : Gen<List<'a>> = gen {
-            let! curr = generator
-            let results =
-                curr :: prevResults
-                |> List.distinctBy projection
-            if (results |> List.length) < length
-            then return! listDistinctByInternal projection length generator results
-            else return results }
-
-    let listDistinctBy
-        (projection : 'a -> 'b)
-        (range : Range<int>)
-        (generator : Gen<'a>) : Gen<List<'a>> = gen {
-            let! length = range |> Gen.integral
-            return! listDistinctByInternal projection length generator [] }
-
-    let listDistinct (range : Range<int>) (generator : Gen<'a>) : Gen<List<'a>> =
-        listDistinctBy id range generator
-
-    let shuffle (xs: 'a list) = gen {
-        let shuffled = Array.zeroCreate<'a>(xs.Length)
-        for i = 0 to xs.Length - 1 do
-            let! j = Gen.integral (Range.constant 0 i)
-            if i <> j then shuffled.[i] <- shuffled.[j]
-            shuffled.[j] <- xs.[i]
-        return shuffled |> Array.toList }
-
-    let manyOrNoItems (list : 'a list) : Gen<List<'a>> = gen {
-        let! desiredLength = Gen.int (Range.linear 0 (list |> List.length))
-        let! shuffled = shuffle list
-        return shuffled |> List.take desiredLength }
-
-    module private Range =
-
-        let decrement range =
-            range
-            |> Range.map (fun i -> i - 1)
-
     module Schema =
-
-        let jsonNull = Gen.constant JsonElementSchema.Null
-
-        let jsonNumber = Gen.constant JsonElementSchema.Number
-
-        let jsonEnumStringNotIntersectingWith (values : Set<string>) =
-            Gen.Strings.defaultString
-            |> Gen.list (Range.linear 1 20)
-            |> Gen.map (Set)
-            |> Gen.filter (Set.intersect values >> Set.count >> (=) 0)
-            |> Gen.map (Set >> JsonStringSchema.Enum >> JsonElementSchema.String)
-
-        let jsonEnumString =
-            jsonEnumStringNotIntersectingWith (Set [])
-
-        let jsonConstStringNotEqualTo value =
-            Gen.Strings.defaultString
-            |> Gen.filter ((<>) value)
-            |> Gen.map (JsonStringSchema.Const >> JsonElementSchema.String)
-
-        let jsonConstString =
-            Gen.Strings.defaultString
-            |> Gen.map (JsonStringSchema.Const >> JsonElementSchema.String)
-
-        let jsonString =
-            Gen.choice [
-                jsonEnumString
-                jsonConstString
-                Gen.constant JsonStringSchema.Unvalidated |> Gen.map JsonElementSchema.String ]
-
-        let jsonObjectInlineProperty jsonSchemaDocument = gen {
-            let! propertyName = Gen.Strings.camelCaseWord
-            let! propertyValue = jsonSchemaDocument
-            return JsonPropertySchema.Inline (propertyName, propertyValue) }
-
-        let jsonObjectProperty jsonSchemaDocument =
-            Gen.choice [
-                jsonObjectInlineProperty jsonSchemaDocument ]
-
-        let rec jsonObject (degree, depth) = gen {
-            let nextDepth = Range.decrement depth
-            let jsonElement' = jsonElement (degree, nextDepth)
-
-            let! properties =
-                jsonObjectProperty jsonElement'
-                |> listDistinctBy (fun p -> p.Name) degree
-
-            let! requiredProperties =
-                properties
-                |> List.map (fun p -> p.Name)
-                |> manyOrNoItems
-                |> Gen.map Set
-    
-            return JsonElementSchema.Object {
-                Properties = properties
-                PatternProperties = []
-                Required = requiredProperties
-                AdditionalProperties = true } }
-
-        and jsonElement (degree, depth) : Gen<JsonElementSchema> = Gen.choice [
-            jsonNull
-            jsonNumber
-            jsonString
-            jsonObject (degree, depth) ]
-
-        let jsonElementOfType (degree, depth) primitive =
-            jsonElement (degree, depth)
-            |> Gen.filter (fun x -> x.Primitive = primitive)
-
-        let jsonElementNotOfType (degree, depth) primitive =
-            jsonElement (degree, depth)
-            |> Gen.filter (fun x -> x.Primitive <> primitive)
 
         module Mutations =
 
@@ -272,8 +158,8 @@ module Gen =
                 |> List.partition (fun p -> objectSchema.Required |> Set.contains p.Name)
             Gen.map2
                 (@)
-                (required |> shuffle)
-                (unrequired |> manyOrNoItems)
+                (required |> Gen.shuffle)
+                (unrequired |> Gen.manyOrNoItems)
 
         let private jsonObject json (objectSchema : JsonObjectSchema) : Gen<JToken> = gen {
             let! propertySpecs = pickProperties objectSchema
@@ -308,7 +194,7 @@ let ``premise: test can generate a valid json instance`` () =
     Property.check <| property {
         let! schema = Gen.Schema.jsonElement DEFAULT_SCHEMA_RANGE
         let! instance = Gen.Instance.json schema
-        test <@ validate schema instance |> List.isEmpty @> }
+        test <@ validate schema instance = [] @> }
 
 let mutateDocumentType (schema : JsonElementSchema) =
     Gen.Schema.jsonElementNotOfType DEFAULT_SCHEMA_RANGE schema.Primitive
@@ -319,7 +205,7 @@ let ``validation fails when type of schema doesn't match type of instance`` () =
     Property.check <| property {
         let! schema =
             Gen.Schema.jsonElement DEFAULT_SCHEMA_RANGE
-            |> Gen.map (JsonSchemaElement.mapObjects allPropertiesAreRequired)
+            |> Gen.map (JsonElementSchema.mapObjects allPropertiesAreRequired)
 
         let! schema' =
             schema
@@ -345,8 +231,8 @@ module Strings =
         Property.check <| property {
             let! schema =
                 Gen.Schema.jsonElement DEFAULT_SCHEMA_RANGE
-                |> Gen.filter (JsonSchemaElement.stringExists stringIsConst)
-                |> Gen.map (JsonSchemaElement.mapObjects allPropertiesAreRequired)
+                |> Gen.filter (JsonElementSchema.stringExists stringIsConst)
+                |> Gen.map (JsonElementSchema.mapObjects allPropertiesAreRequired)
 
             let! schema' =
                 schema
@@ -370,8 +256,8 @@ module Strings =
         Property.check <| property {
             let! schema =
                 Gen.Schema.jsonElement DEFAULT_SCHEMA_RANGE
-                |> Gen.filter (JsonSchemaElement.stringExists stringIsEnum)
-                |> Gen.map (JsonSchemaElement.mapObjects allPropertiesAreRequired)
+                |> Gen.filter (JsonElementSchema.stringExists stringIsEnum)
+                |> Gen.map (JsonElementSchema.mapObjects allPropertiesAreRequired)
 
             let! schema' =
                 schema
@@ -400,8 +286,8 @@ module Objects =
         Property.check <| property {
             let! schema =
                 Gen.Schema.jsonObject DEFAULT_SCHEMA_RANGE
-                |> Gen.filter (JsonSchemaElement.objectExists (hasPropertyDefinition))
-                |> Gen.map (JsonSchemaElement.mapObjects allPropertiesAreRequired)
+                |> Gen.filter (JsonElementSchema.objectExists (hasPropertyDefinition))
+                |> Gen.map (JsonElementSchema.mapObjects allPropertiesAreRequired)
 
             let! schema' =
                 schema

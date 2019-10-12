@@ -6,6 +6,42 @@ open Newtonsoft.Json.Linq
 open NthCommit.JsonSchema
 open System
 
+let rec private listDistinctByInternal
+    (projection : 'a -> 'b)
+    (length : int)
+    (generator : Gen<'a>)
+    (prevResults : 'a list) : Gen<List<'a>> = gen {
+        let! curr = generator
+        let results =
+            curr :: prevResults
+            |> List.distinctBy projection
+        if (results |> List.length) < length
+        then return! listDistinctByInternal projection length generator results
+        else return results }
+
+let listDistinctBy
+    (projection : 'a -> 'b)
+    (range : Range<int>)
+    (generator : Gen<'a>) : Gen<List<'a>> = gen {
+        let! length = range |> Gen.integral
+        return! listDistinctByInternal projection length generator [] }
+
+let listDistinct (range : Range<int>) (generator : Gen<'a>) : Gen<List<'a>> =
+    listDistinctBy id range generator
+
+let shuffle (xs: 'a list) = gen {
+    let shuffled = Array.zeroCreate<'a>(xs.Length)
+    for i = 0 to xs.Length - 1 do
+        let! j = Gen.integral (Range.constant 0 i)
+        if i <> j then shuffled.[i] <- shuffled.[j]
+        shuffled.[j] <- xs.[i]
+    return shuffled |> Array.toList }
+
+let manyOrNoItems (list : 'a list) : Gen<List<'a>> = gen {
+    let! desiredLength = Gen.int (Range.linear 0 (list |> List.length))
+    let! shuffled = shuffle list
+    return shuffled |> List.take desiredLength }
+
 module private Result =
 
     let isOk =
@@ -144,3 +180,85 @@ module Json =
 let notIn source generator =
     generator
     |> Gen.filter (fun x -> List.contains x source |> not)
+
+module Schema =
+
+    open NthCommit.JsonSchema.Dom
+
+    module private Range =
+
+        let decrement range =
+            range
+            |> Range.map (fun i -> i - 1)
+
+    let jsonNull = Gen.constant JsonElementSchema.Null
+
+    let jsonNumber = Gen.constant JsonElementSchema.Number
+
+    let jsonEnumStringNotIntersectingWith (values : Set<string>) =
+        Strings.defaultString
+        |> Gen.list (Range.linear 1 20)
+        |> Gen.map (Set)
+        |> Gen.filter (Set.intersect values >> Set.count >> (=) 0)
+        |> Gen.map (Set >> JsonStringSchema.Enum >> JsonElementSchema.String)
+
+    let jsonEnumString =
+        jsonEnumStringNotIntersectingWith (Set [])
+
+    let jsonConstStringNotEqualTo value =
+        Strings.defaultString
+        |> Gen.filter ((<>) value)
+        |> Gen.map (JsonStringSchema.Const >> JsonElementSchema.String)
+
+    let jsonConstString =
+        Strings.defaultString
+        |> Gen.map (JsonStringSchema.Const >> JsonElementSchema.String)
+
+    let jsonString =
+        Gen.choice [
+            jsonEnumString
+            jsonConstString
+            Gen.constant JsonStringSchema.Unvalidated |> Gen.map JsonElementSchema.String ]
+
+    let jsonObjectInlineProperty jsonSchemaDocument = gen {
+        let! propertyName = Strings.camelCaseWord
+        let! propertyValue = jsonSchemaDocument
+        return JsonPropertySchema.Inline (propertyName, propertyValue) }
+
+    let jsonObjectProperty jsonSchemaDocument =
+        Gen.choice [
+            jsonObjectInlineProperty jsonSchemaDocument ]
+
+    let rec jsonObject (degree, depth) = gen {
+        let nextDepth = Range.decrement depth
+        let jsonElement' = jsonElement (degree, nextDepth)
+
+        let! properties =
+            jsonObjectProperty jsonElement'
+            |> listDistinctBy (fun p -> p.Name) degree
+
+        let! requiredProperties =
+            properties
+            |> List.map (fun p -> p.Name)
+            |> manyOrNoItems
+            |> Gen.map Set
+    
+        return JsonElementSchema.Object {
+            Properties = properties
+            PatternProperties = []
+            Required = requiredProperties
+            AdditionalProperties = true } }
+
+    and jsonElement (degree, depth) : Gen<JsonElementSchema> = Gen.choice [
+        jsonNull
+        jsonNumber
+        jsonString
+        jsonObject (degree, depth) ]
+
+    let jsonElementOfType (degree, depth) primitive =
+        jsonElement (degree, depth)
+        |> Gen.filter (fun x -> x.Primitive = primitive)
+
+    let jsonElementNotOfType (degree, depth) primitive =
+        jsonElement (degree, depth)
+        |> Gen.filter (fun x -> x.Primitive <> primitive)
