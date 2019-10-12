@@ -46,17 +46,20 @@ module JsonSchema =
             | SchemaError.Json _ -> buildInvalidJsonMessage ValidationFailureTarget.Instance
             | SchemaError.Type e    -> buildSchemaTypeErrorMessage e
             | SchemaError.Value _   -> "value error"
+            | _ -> "unknown error"
             |> sprintf "%s: %s" prefix
 
         let private resolveSchemaErrorPath = function
             | SchemaError.Json p -> p
             | SchemaError.Type e -> e.Path
             | SchemaError.Value e -> e.Path
+            | SchemaError.Required e -> e.Path
 
         let private resolveSchemaErrorType = function
             | SchemaError.Json _ -> ValidationFailureType.InvalidJson
             | SchemaError.Type _
-            | SchemaError.Value _ -> ValidationFailureType.SchemaViolation
+            | SchemaError.Value _
+            | SchemaError.Required _ -> ValidationFailureType.SchemaViolation
 
         let fromSchemaError target prefix error = {
             Target  = target

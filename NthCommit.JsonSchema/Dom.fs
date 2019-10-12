@@ -8,19 +8,19 @@ module Dom =
     type JsonReference = JsonReference of string
 
     [<RequireQualifiedAccess>]
-    type JsonSchemaString =
-        | Enum          of Set<string>
-        | Const         of string
+    type JsonStringSchema =
+        | Enum of Set<string>
+        | Const of string
         | Unvalidated
 
-    type JsonSchemaObject = {
-        Properties              : JsonSchemaObjectProperty list
-        PatternProperties       : (Regex * JsonSchemaObjectProperty) list
-        Required                : Set<string>
-        AdditionalProperties    : bool }
+    type JsonObjectSchema = {
+        Properties : JsonPropertySchema list
+        PatternProperties : (Regex * JsonPropertySchema) list
+        Required : Set<string>
+        AdditionalProperties : bool }
 
-    and JsonSchemaObjectProperty =
-        | Inline    of (string * JsonSchemaElement)
+    and JsonPropertySchema =
+        | Inline    of (string * JsonElementSchema)
         | Reference of JsonReference
 
         member this.Name =
@@ -28,24 +28,24 @@ module Dom =
             | Inline (name, _)      -> name
             | Reference _           -> "$ref"
 
-    and JsonSchemaArray = {
-        Items : JsonSchemaElement }
+    and JsonArraySchema = {
+        Items : JsonElementSchema }
 
-    and JsonSchemaElement =
+    and JsonElementSchema =
         | Null
         | Number
         | Boolean
-        | String        of JsonSchemaString
-        | Object        of JsonSchemaObject
-        | Array         of JsonSchemaArray
+        | String of JsonStringSchema
+        | Object of JsonObjectSchema
+        | Array of JsonArraySchema
         | Unvalidated
 
         member this.Primitive =
             match this with
-            | Null      -> JsonPrimitive.Null
-            | Boolean   -> JsonPrimitive.Boolean
-            | Number    -> JsonPrimitive.Number
-            | String _  -> JsonPrimitive.String
-            | Array _   -> JsonPrimitive.Array
-            | Object _  -> JsonPrimitive.Object
-            | _         -> raise (Exception ("Unhandled JsonDocument"))
+            | Null -> JsonPrimitive.Null
+            | Boolean -> JsonPrimitive.Boolean
+            | Number -> JsonPrimitive.Number
+            | String _ -> JsonPrimitive.String
+            | Array _ -> JsonPrimitive.Array
+            | Object _ -> JsonPrimitive.Object
+            | _ -> raise (Exception ("Unhandled JsonDocument"))
