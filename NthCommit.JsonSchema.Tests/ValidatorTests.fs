@@ -58,9 +58,6 @@ module JsonSchemaElement =
         | JsonSchemaElement.String spec -> predicate spec
         | _ -> false)
 
-let private allPropertiesAreRequired (spec : JsonSchemaObject) =
-    { spec with Required = spec.Properties |> List.map (fun p -> p.Name) |> Set }
-
 module Gen =
 
     let rec private listDistinctByInternal
@@ -181,25 +178,20 @@ module Gen =
 
         module Mutations =
 
-            let private runMutation (mutator : JsonSchemaElement -> Option<Gen<JsonSchemaElement>>) element = seq {
-                match mutator element with
-                | Some mutation -> yield mutation
-                | None _ -> () }
-
-            let rec private mutateProperty mutator (spec : JsonSchemaObjectProperty) =
+            let rec private runMutatorForProperty mutator (spec : JsonSchemaObjectProperty) =
                 match spec with
                 | Inline (propertyName, element) ->
-                    mutateElement mutator element
+                    runMutatorForElement mutator element
                     |> Seq.map (Gen.map (fun element' -> Inline (propertyName, element')))
                 | Reference _ -> Seq.empty
 
-            and private mutateObject mutator (spec : JsonSchemaObject) : seq<Gen<JsonSchemaObject>> = seq {
+            and private runMutatorForObject mutator (spec : JsonSchemaObject) : seq<Gen<JsonSchemaObject>> = seq {
                 yield!
                     spec.Properties
                     |> List.indexed
                     |> List.map (fun (i, propertySpec) ->
                         propertySpec
-                        |> mutateProperty mutator
+                        |> runMutatorForProperty mutator
                         |> Seq.map (Gen.map (fun propertySpec' ->
                             let rebuiltProperties =
                                 spec.Properties
@@ -208,25 +200,35 @@ module Gen =
                             { spec with Properties = rebuiltProperties })))
                     |> Seq.concat }
 
-            and private recursivelyRunMutation (mutator : JsonSchemaElement -> Option<Gen<JsonSchemaElement>>) element =
+            and private runMutatorForNestedElements (mutator : JsonSchemaElement -> seq<Gen<JsonSchemaElement>>) element =
                 match element with
                 | JsonSchemaElement.Object spec ->
-                    mutateObject mutator spec
+                    runMutatorForObject mutator spec
                     |> Seq.map (Gen.map (JsonSchemaElement.Object))
                 | _ -> Seq.empty
 
-            and mutateElement
-                (mutator : JsonSchemaElement -> Option<Gen<JsonSchemaElement>>)
+            and private runMutatorForElement
+                (mutator : JsonSchemaElement -> seq<Gen<JsonSchemaElement>>)
                 (element : JsonSchemaElement) : seq<Gen<JsonSchemaElement>> = seq {
-                    yield! runMutation mutator element
-                    yield! recursivelyRunMutation mutator element }
+                    yield! mutator element
+                    yield! runMutatorForNestedElements mutator element }
 
-            let tryMutateSchema (mutator : JsonSchemaElement -> Option<Gen<JsonSchemaElement>>) (element : JsonSchemaElement) = gen {
-                let mutations = mutateElement mutator element
+            let mutateElement (mutator : JsonSchemaElement -> seq<Gen<JsonSchemaElement>>) (element : JsonSchemaElement) = gen {
+                let mutations = runMutatorForElement mutator element
                 let! mutationGenerator = Gen.item mutations |> Gen.noShrink
                 return! mutationGenerator |> Gen.noShrink }
 
-            let mutateSchema mutator element = tryMutateSchema (mutator >> Some) element |> Gen.noShrink
+            let mutateString (mutator : JsonSchemaString -> seq<Gen<JsonSchemaElement>>) (element : JsonSchemaElement) =
+                let mutator' = function
+                    | JsonSchemaElement.String spec -> mutator spec
+                    | _ -> Seq.empty
+                mutateElement mutator' element
+
+            let mutateObject (mutator : JsonSchemaObject -> seq<Gen<JsonSchemaElement>>) (element : JsonSchemaElement) =
+                let mutator' = function
+                    | JsonSchemaElement.Object spec -> mutator spec
+                    | _ -> Seq.empty
+                mutateElement mutator' element
 
     module Instance =
 
@@ -289,6 +291,9 @@ module Gen =
 
 let DEFAULT_SCHEMA_RANGE = ((Range.constant 0 6), (Range.linear 1 6))
 
+let allPropertiesAreRequired (spec : JsonSchemaObject) =
+    { spec with Required = spec.Properties |> List.map (fun p -> p.Name) |> Set }
+
 let validate schema instance =
     match Validator.validate schema instance with
     | Ok _ -> []
@@ -303,6 +308,7 @@ let ``premise: test can generate a valid json instance`` () =
 
 let mutateDocumentType (schema : JsonSchemaElement) =
     Gen.Schema.jsonElementNotOfType DEFAULT_SCHEMA_RANGE schema.Primitive
+    |> Seq.singleton
 
 [<Fact>]
 let ``validation fails when type of schema doesn't match type of instance`` () =
@@ -313,7 +319,7 @@ let ``validation fails when type of schema doesn't match type of instance`` () =
 
         let! schema' =
             schema
-            |> Gen.Schema.Mutations.mutateSchema mutateDocumentType
+            |> Gen.Schema.Mutations.mutateElement mutateDocumentType
 
         let! instance = Gen.Instance.json schema'
         test <@ validate schema instance <> [] @> }
@@ -324,25 +330,11 @@ module Strings =
         | JsonSchemaString.Const _ -> true
         | _ -> false
 
-    let stringIsEnum = function
-        | JsonSchemaString.Enum _ -> true
-        | _ -> false
-
-    let mutateStringSuchThat (mutator : JsonSchemaString -> Option<Gen<JsonSchemaElement>>) = function
-        | JsonSchemaElement.String spec -> mutator spec
-        | _ -> None
-
-    let constStringValueIsReplaced = function
+    let replaceStringConstValue = function
         | JsonSchemaString.Const value ->
             Gen.Schema.jsonConstStringNotEqualTo value
-            |> Some
-        | _ -> None
-
-    let enumStringValuesAreReplaced = function
-        | JsonSchemaString.Enum values ->
-            Gen.Schema.jsonEnumStringNotIntersectingWith values
-            |> Some
-        | _ -> None
+            |> Seq.singleton
+        | _ -> Seq.empty
 
     [<Fact>]
     let ``validation fails when string is not equal to const specification`` () =
@@ -354,10 +346,20 @@ module Strings =
 
             let! schema' =
                 schema
-                |> Gen.Schema.Mutations.tryMutateSchema (mutateStringSuchThat constStringValueIsReplaced)
+                |> Gen.Schema.Mutations.mutateString replaceStringConstValue
 
             let! instance = Gen.Instance.json schema'
             test <@ validate schema instance <> [] @> }
+
+    let stringIsEnum = function
+        | JsonSchemaString.Enum _ -> true
+        | _ -> false
+
+    let replaceStringEnumValues = function
+        | JsonSchemaString.Enum values ->
+            Gen.Schema.jsonEnumStringNotIntersectingWith values
+            |> Seq.singleton
+        | _ -> Seq.empty
 
     [<Fact>]
     let ``validation fails when string is not in enum specification`` () =
@@ -369,7 +371,7 @@ module Strings =
 
             let! schema' =
                 schema
-                |> Gen.Schema.Mutations.tryMutateSchema (mutateStringSuchThat enumStringValuesAreReplaced)
+                |> Gen.Schema.Mutations.mutateString replaceStringEnumValues
 
             let! instance = Gen.Instance.json schema'
             test <@ validate schema instance <> [] @> }
