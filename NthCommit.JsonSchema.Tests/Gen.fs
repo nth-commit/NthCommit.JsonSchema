@@ -181,6 +181,17 @@ let notIn source generator =
     generator
     |> Gen.filter (fun x -> List.contains x source |> not)
 
+let notInBy source projection generator =
+    let projectedSource =
+        source
+        |> List.map projection
+    generator
+    |> Gen.filter (fun x ->
+        let projectedX = projection x
+        projectedSource
+        |> List.contains projectedX
+        |> not)
+
 module Schema =
 
     open NthCommit.JsonSchema.Dom
@@ -190,6 +201,8 @@ module Schema =
         let decrement range =
             range
             |> Range.map (fun i -> i - 1)
+
+    let jsonUnvalidated = Gen.constant JsonElementSchema.Unvalidated
 
     let jsonNull = Gen.constant JsonElementSchema.Null
 
@@ -225,9 +238,9 @@ module Schema =
         let! propertyValue = jsonSchemaDocument
         return JsonPropertySchema.Inline (propertyName, propertyValue) }
 
-    let jsonObjectProperty jsonSchemaDocument =
+    let jsonObjectProperty jsonElement =
         Gen.choice [
-            jsonObjectInlineProperty jsonSchemaDocument ]
+            jsonObjectInlineProperty jsonElement ]
 
     let rec jsonObject (degree, depth) = gen {
         let nextDepth = Range.decrement depth
@@ -242,12 +255,14 @@ module Schema =
             |> List.map (fun p -> p.Name)
             |> manyOrNoItems
             |> Gen.map Set
+
+        let! additionalProperties = Gen.bool
     
         return JsonElementSchema.Object {
             Properties = properties
             PatternProperties = []
             Required = requiredProperties
-            AdditionalProperties = true } }
+            AdditionalProperties = additionalProperties } }
 
     and jsonElement (degree, depth) : Gen<JsonElementSchema> = Gen.choice [
         jsonNull
@@ -263,9 +278,18 @@ module Schema =
         jsonElement (degree, depth)
         |> Gen.filter (fun x -> x.Primitive <> primitive)
 
-
     module Defaults = 
 
         let DEFAULT_SCHEMA_RANGE = ((Range.constant 0 6), (Range.linear 1 6))
 
         let jsonElement = jsonElement DEFAULT_SCHEMA_RANGE
+
+        let jsonObject = jsonObject DEFAULT_SCHEMA_RANGE
+
+        let jsonElementOfType primitive =
+            jsonElement
+            |> Gen.filter (fun x -> x.Primitive = primitive)
+
+        let jsonElementNotOfType primitive =
+            jsonElement
+            |> Gen.filter (fun x -> x.Primitive <> primitive)

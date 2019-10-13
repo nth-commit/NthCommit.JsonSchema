@@ -172,14 +172,14 @@ module Gen =
         let rec private jsonElement (schema : JsonElementSchema) : Gen<JToken> =
             match schema with
             | JsonElementSchema.Null -> createJValue null |> Gen.constant
+            | JsonElementSchema.Boolean -> Gen.bool |> Gen.map createJValue
             | JsonElementSchema.Number -> jsonNumber
             | JsonElementSchema.String stringSchema -> jsonString stringSchema
+            | JsonElementSchema.Array _ -> JArray([]) :> JToken |> Gen.constant
             | JsonElementSchema.Object objectSchema -> jsonObject jsonElement objectSchema
-            | _ -> raise (Exception ("Unhandled"))
+            | JsonElementSchema.Unvalidated -> JObject.FromObject({||}) :> JToken |> Gen.constant
 
         let json schema = jsonElement schema |> Gen.Json.serialize
-
-let DEFAULT_SCHEMA_RANGE = ((Range.constant 0 6), (Range.linear 1 6))
 
 let allPropertiesAreRequired (objectSchema : JsonObjectSchema) =
     { objectSchema with Required = objectSchema.Properties |> List.map (fun p -> p.Name) |> Set }
@@ -192,19 +192,19 @@ let validate schema instance =
 [<Fact>]
 let ``premise: test can generate a valid json instance`` () =
     Property.check <| property {
-        let! schema = Gen.Schema.jsonElement DEFAULT_SCHEMA_RANGE
+        let! schema = Gen.Schema.Defaults.jsonElement
         let! instance = Gen.Instance.json schema
         test <@ validate schema instance = [] @> }
 
 let mutateDocumentType (schema : JsonElementSchema) =
-    Gen.Schema.jsonElementNotOfType DEFAULT_SCHEMA_RANGE schema.Primitive
+    Gen.Schema.Defaults.jsonElementNotOfType schema.Primitive
     |> Seq.singleton
 
 [<Fact>]
 let ``validation fails when type of schema doesn't match type of instance`` () =
     Property.check <| property {
         let! schema =
-            Gen.Schema.jsonElement DEFAULT_SCHEMA_RANGE
+            Gen.Schema.Defaults.jsonElement
             |> Gen.map (JsonElementSchema.mapObjects allPropertiesAreRequired)
 
         let! schema' =
@@ -227,10 +227,10 @@ module Strings =
         | _ -> Seq.empty
 
     [<Fact>]
-    let ``validation fails when string is not equal to const specification`` () =
+    let ``validating string const`` () =
         Property.check <| property {
             let! schema =
-                Gen.Schema.jsonElement DEFAULT_SCHEMA_RANGE
+                Gen.Schema.Defaults.jsonElement
                 |> Gen.filter (JsonElementSchema.stringExists stringIsConst)
                 |> Gen.map (JsonElementSchema.mapObjects allPropertiesAreRequired)
 
@@ -252,10 +252,10 @@ module Strings =
         | _ -> Seq.empty
 
     [<Fact>]
-    let ``validation fails when string is not in enum specification`` () =
+    let ``validating string enum`` () =
         Property.check <| property {
             let! schema =
-                Gen.Schema.jsonElement DEFAULT_SCHEMA_RANGE
+                Gen.Schema.Defaults.jsonElement
                 |> Gen.filter (JsonElementSchema.stringExists stringIsEnum)
                 |> Gen.map (JsonElementSchema.mapObjects allPropertiesAreRequired)
 
@@ -282,10 +282,10 @@ module Objects =
             |> Seq.singleton
 
     [<Fact>]
-    let ``validation fails when a required property is missing`` () =
+    let ``validating required properties`` () =
         Property.check <| property {
             let! schema =
-                Gen.Schema.jsonObject DEFAULT_SCHEMA_RANGE
+                Gen.Schema.Defaults.jsonObject
                 |> Gen.filter (JsonElementSchema.objectExists (hasPropertyDefinition))
                 |> Gen.map (JsonElementSchema.mapObjects allPropertiesAreRequired)
 
@@ -295,3 +295,38 @@ module Objects =
 
             let! instance = Gen.Instance.json schema'
             test <@ validate schema instance <> [] @> }
+
+    let setAdditionalProperties value (objectSchema : JsonObjectSchema) =
+        { objectSchema with AdditionalProperties = value }
+
+    let addPropertyDefinitions = fun (objectSchema : JsonObjectSchema) ->
+        gen {
+            let! additionalProperties =
+                Gen.Schema.jsonObjectProperty Gen.Schema.jsonUnvalidated
+                |> Gen.notInBy objectSchema.Properties (fun p -> p.Name)
+                |> Gen.listDistinct (Range.exponential 1 10)
+            let newProperties = List.append objectSchema.Properties additionalProperties
+            return
+                { objectSchema with Properties = newProperties }
+                |> JsonElementSchema.Object
+        }
+        |> Seq.singleton
+
+    [<Theory>]
+    [<InlineData(true)>]
+    [<InlineData(false)>]
+    let ``validating additionalProperties`` (additionalProperties) =
+        Property.check <| property {
+            let! schema =
+                Gen.Schema.Defaults.jsonObject
+                |> Gen.map (JsonElementSchema.mapObjects (setAdditionalProperties additionalProperties))
+
+            let! schema' =
+                schema
+                |> Gen.Schema.Mutations.mutateObject addPropertyDefinitions
+                |> Gen.map (JsonElementSchema.mapObjects allPropertiesAreRequired)
+
+            let! instance = Gen.Instance.json schema'
+            if additionalProperties
+            then test <@ validate schema instance = [] @>
+            else test <@ validate schema instance <> [] @> }

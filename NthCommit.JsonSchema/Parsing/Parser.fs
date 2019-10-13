@@ -82,7 +82,7 @@ module Parser =
                 |> Seq.toList
             | None -> []
 
-        let private parseRequiredProperties (propertiesByName : Map<string, JProperty>) =
+        let private parseRequired (propertiesByName : Map<string, JProperty>) =
             match propertiesByName |> Map.tryFind "required" with
             | Some requiredProperty ->
                 (requiredProperty.Value :?> JArray).AsJEnumerable()
@@ -90,12 +90,18 @@ module Parser =
             | None -> Seq.empty
             |> Set
 
+        let private parseAdditionalProperties (propertiesByName : Map<string, JProperty>) =
+            propertiesByName
+            |> Map.tryFind "additionalProperties"
+            |> Option.map (fun additionalProperties -> additionalProperties.Value.Value<bool>())
+            |> Option.defaultValue true
+
         let parseObject parseSchemaToken (propertiesByName : Map<string, JProperty>) =
             JsonElementSchema.Object <| {
                 Properties = parseSchemaProperties parseSchemaToken propertiesByName
                 PatternProperties = parseSchemaPatternProperties parseSchemaToken propertiesByName
-                Required = parseRequiredProperties propertiesByName
-                AdditionalProperties = true }
+                Required = parseRequired propertiesByName
+                AdditionalProperties = parseAdditionalProperties propertiesByName }
 
     module private List =
 

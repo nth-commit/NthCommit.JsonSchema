@@ -174,17 +174,6 @@ module Object =
                     |> List.exactlyOne
                     |> (fun p -> p.Name = propertyName) @> }
 
-    [<Fact>]
-    let ``parses object schema with additionalProperties set`` () =
-        Property.check <| property {
-            let! additionalProperties = Gen.bool
-            let schema =
-                @"{
-                    ""type"": ""object"",
-                    ""additionalProperties"": " + additionalProperties.ToString().ToLower() + @"
-                }"
-            test <@ Ok <| defaultObjectSchema = parse schema @> }
-
     module Validation =
 
         [<Fact>]

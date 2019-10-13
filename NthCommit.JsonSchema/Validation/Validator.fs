@@ -17,7 +17,11 @@ type SchemaValueError = {
 
 type SchemaRequiredError = {
     Path : string
-    PropertyName : string }
+    RequiredPropertyName : string }
+
+type SchemaAdditionError = {
+    Path : string
+    AdditionalPropertyName : string }
 
 [<RequireQualifiedAccess>]
 type SchemaError =
@@ -25,6 +29,7 @@ type SchemaError =
     | Type of SchemaTypeError
     | Value of SchemaValueError
     | Required of SchemaRequiredError
+    | Additional of SchemaAdditionError
 
 module JTokenType =
 
@@ -119,10 +124,28 @@ module Validator =
             |> List.map (fun p -> p.Name)
             |> Set
         Set.difference objectSchema.Required instancePropertyNames
-        |> Seq.map (fun x ->
-            {   Path = ctx.CurrentPath.Render()
-                PropertyName = x }
-            |> SchemaError.Required)
+        |> Seq.map (fun missingRequiredPropertyName ->
+            SchemaError.Required {
+                Path = ctx.CurrentPath.Render()
+                RequiredPropertyName = missingRequiredPropertyName })
+
+    let validateAdditionalProperties (objectSchema : JsonObjectSchema) (objectInstance : JProperty list) (ctx : JsonContext) : seq<SchemaError> =
+        if objectSchema.AdditionalProperties
+        then Seq.empty
+        else
+            let schemaPropertyNames =
+                objectSchema.Properties
+                |> List.map (fun p -> p.Name)
+                |> Set
+            let instancePropertyNames =
+                objectInstance
+                |> List.map (fun p -> p.Name)
+                |> Set
+            Set.difference instancePropertyNames schemaPropertyNames
+            |> Seq.map (fun additionalPropertyName ->
+                SchemaError.Additional { 
+                    Path = ctx.CurrentPath.Render()
+                    AdditionalPropertyName = additionalPropertyName })
 
     let rec private validateProperty (schemas : JsonElementSchema list) (instance : JProperty) (ctx : JsonContext) : seq<SchemaError> =
         schemas
@@ -156,8 +179,8 @@ module Validator =
                 validateProperty propertySchemas propertyInstance (ctx.PushProperty propertyInstance.Name))
             |> Seq.concat
 
-        yield!
-            validateRequiredProperties objectSchema objectInstance ctx }
+        yield! validateRequiredProperties objectSchema objectInstance ctx
+        yield! validateAdditionalProperties objectSchema objectInstance ctx }
 
     and private elementMatchesSchema (schema : JsonElementSchema) (instance : JToken) (ctx : JsonContext) : seq<SchemaError> = seq {
         match (schema, matchJToken instance) with
