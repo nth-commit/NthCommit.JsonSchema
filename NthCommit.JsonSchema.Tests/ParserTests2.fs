@@ -7,6 +7,7 @@ open Newtonsoft.Json
 open Newtonsoft.Json.Linq
 open NthCommit.JsonSchema.Dom
 open NthCommit.JsonSchema.Parser
+open Hedgehog
 
 module JsonElementSchema =
 
@@ -53,21 +54,19 @@ module JsonElementSchema =
 
     and private mapToJToken (schema : JsonElementSchema) : JToken =
         match schema with
-        | JsonElementSchema.String stringSchema -> mapStringToJProperties stringSchema |> JObject :> JToken
-        | JsonElementSchema.Object objectSchema -> mapObjectToJProperties objectSchema |> JObject :> JToken
-        | x -> null
+        | JsonElementSchema.Null _ -> JProperty("type", "null") |> Seq.singleton
+        | JsonElementSchema.Boolean _ -> JProperty("type", "boolean") |> Seq.singleton
+        | JsonElementSchema.Number _ -> JProperty("type", "number") |> Seq.singleton
+        | JsonElementSchema.String stringSchema -> mapStringToJProperties stringSchema
+        | JsonElementSchema.Object objectSchema -> mapObjectToJProperties objectSchema
+        | _ -> raise (Exception ("Unhandled"))
+        |> JObject :> JToken
 
     let serialize schema = mapToJToken schema |> JsonConvert.SerializeObject
 
-let raiseArrogantException () =
-    raise (Exception ("No way will this fail"))
-
-let parseArrogantly schemaJson =
-    match parse schemaJson with
-    | Ok schema -> schema
-    | Error _ -> raiseArrogantException ()
-
 [<Fact>]
-let ``try serialize something`` () =
-    let roundTripped = META_SCHEMA |> JsonElementSchema.serialize |> parseArrogantly
-    test <@ META_SCHEMA = roundTripped @>
+let ``deserialization does not lose entropy`` () =
+    Property.check <| property {
+        let! schema = Gen.Schema.Defaults.jsonElement
+        let roundTrippedSchema = schema |> JsonElementSchema.serialize |> parse
+        test <@ Ok schema = roundTrippedSchema @> }

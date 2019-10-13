@@ -262,3 +262,10 @@ module Schema =
     let jsonElementNotOfType (degree, depth) primitive =
         jsonElement (degree, depth)
         |> Gen.filter (fun x -> x.Primitive <> primitive)
+
+
+    module Defaults = 
+
+        let DEFAULT_SCHEMA_RANGE = ((Range.constant 0 6), (Range.linear 1 6))
+
+        let jsonElement = jsonElement DEFAULT_SCHEMA_RANGE

@@ -155,7 +155,7 @@ module Object =
         let schema = @"{ ""type"": ""object"" }"
         test <@ defaultObjectSchema = parseArrogantly schema @>
 
-    [<Fact(Skip = "TODO")>]
+    [<Fact>]
     let ``parses object schema with properties set`` () =
         Property.check <| property {
             let! propertyName = Gen.Strings.camelCaseWord

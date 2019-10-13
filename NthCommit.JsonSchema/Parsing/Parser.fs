@@ -1,15 +1,10 @@
 ﻿namespace NthCommit.JsonSchema
 
+open System
 open Newtonsoft.Json.Linq
 open NthCommit.JsonSchema.Dom
 open NthCommit.JsonSchema.JsonHelper
-open Validator
-open System
-open System.Text.RegularExpressions
-open Newtonsoft.Json
-
-module private JProperty =
-    let stringValue (property : JProperty) = property.Value.Value<string>()
+open NthCommit.JsonSchema.Validator
 
 [<RequireQualifiedAccess>]
 type ParserError =
@@ -32,16 +27,33 @@ module Parser =
 
     module Strings =
 
-        let tryParseEnum (propertiesByName : Map<string, JProperty>) : Option<JsonStringSchema> =
+        module Option =
+
+            let bindOr (f : unit -> 'a option) x =
+                match x with
+                | Some x' -> Some x'
+                | None ->
+                    match f () with
+                    | Some x' -> Some x'
+                    | None -> None
+
+        let tryParseEnum (propertiesByName : Map<string, JProperty>) =
             propertiesByName |> Map.tryFind "enum"
             |> Option.map (fun enumProperty ->
                 (enumProperty.Value :?> JArray)
                 |> Seq.map (fun enumValueToken -> enumValueToken.Value<string>())
                 |> Set
-                |> JsonStringSchema.Enum)
+                |> JsonStringSchema.Enum) : Option<JsonStringSchema>
+
+        let tryParseConst (propertiesByName : Map<string, JProperty>) =
+            propertiesByName |> Map.tryFind "const"
+            |> Option.map (fun constProperty ->
+                constProperty.Value.Value<string>()
+                |> JsonStringSchema.Const) : Option<JsonStringSchema>
 
         let parseString (propertiesByName : Map<string, JProperty>) =
             tryParseEnum propertiesByName
+            |> Option.bindOr (fun _ -> tryParseConst propertiesByName)
             |> Option.defaultValue JsonStringSchema.Unvalidated
             |> JsonElementSchema.String
 
@@ -70,11 +82,19 @@ module Parser =
                 |> Seq.toList
             | None -> []
 
+        let private parseRequiredProperties (propertiesByName : Map<string, JProperty>) =
+            match propertiesByName |> Map.tryFind "required" with
+            | Some requiredProperty ->
+                (requiredProperty.Value :?> JArray).AsJEnumerable()
+                |> Seq.map (fun t -> t.Value<string>())
+            | None -> Seq.empty
+            |> Set
+
         let parseObject parseSchemaToken (propertiesByName : Map<string, JProperty>) =
             JsonElementSchema.Object <| {
                 Properties = parseSchemaProperties parseSchemaToken propertiesByName
                 PatternProperties = parseSchemaPatternProperties parseSchemaToken propertiesByName
-                Required = Set []
+                Required = parseRequiredProperties propertiesByName
                 AdditionalProperties = true }
 
     module private List =
@@ -91,7 +111,7 @@ module Parser =
     let private tryGetTypeProperty (propertiesByName : Map<string, JProperty>) =
         propertiesByName
         |> Map.tryFind "type"
-        |> Option.map JProperty.stringValue
+        |> Option.map (fun p -> p.Value.Value<string>())
 
     let private parseSchemaOfType parseSchemaToken (propertiesByName : Map<string, JProperty>) = function
         | "null" -> JsonElementSchema.Null
@@ -104,7 +124,7 @@ module Parser =
 
     let private parseSchema parseSchemaToken (propertiesByName : Map<string, JProperty>) =
         match tryGetTypeProperty propertiesByName with
-        | Some x -> parseSchemaOfType parseSchemaToken propertiesByName x
+        | Some jtype -> parseSchemaOfType parseSchemaToken propertiesByName jtype
         | None -> JsonElementSchema.Unvalidated
 
     let rec private parseSchemaToken schemaToken : JsonElementSchema =
@@ -114,7 +134,7 @@ module Parser =
             parseSchema parseSchemaToken propertiesByName
         | _ -> raiseUnhandledToken schemaToken
 
-    let META_SCHEMA = JsonElementSchema.Object {
+    let private META_SCHEMA = JsonElementSchema.Object {
         Properties = [
             JsonPropertySchema.Inline (
                 "type",
