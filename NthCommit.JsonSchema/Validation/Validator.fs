@@ -44,13 +44,6 @@ module JTokenType =
 
 module Validator =
 
-    module private List =
-
-        let toMap keyProjection list =
-            list
-            |> List.map (fun x -> (keyProjection x, x))
-            |> Map
-
     type JsonPathComponent =
         | PropertyAccess of string
         | ArrayAccess of int
@@ -84,119 +77,199 @@ module Validator =
             member this.PushProperty property =
                 { this with CurrentPath = this.CurrentPath.Push (PropertyAccess property) }
 
-    let private reportTypeMismatch (schema : JsonElementSchema) (instance : JToken) (ctx : JsonContext) =
-        SchemaError.Type {
-            Path            = ctx.CurrentPath.Render()
-            ExpectedTypes   = Set([schema.Primitive])
-            ActualType      = instance.Type |> JTokenType.toPrimitive }
+    type JsonContextReader<'a> = | JsonContextReader of (JsonContext -> 'a)
 
-    let private validateInstanceIsValue (instance : 'a) (value : 'a) (ctx : JsonContext) = seq {
-        if value <> instance
-        then yield SchemaError.Value {
-            Path = ctx.CurrentPath.Render()
-            Value = instance.ToString() } }
+    module JsonContextReader =
 
-    let private validateInstanceInValues (instance : 'a) (values : Set<'a>) (ctx : JsonContext) = seq {
-        if values |> Set.contains instance |> not
-        then yield SchemaError.Value {
-            Path = ctx.CurrentPath.Render()
-            Value = instance.ToString() } }
+        let run (ctx : JsonContext) (JsonContextReader read) : 'a =
+            read ctx
 
-    let private stringMatchesSchema (schema : JsonStringSchema) (instance : string) (ctx : JsonContext) : seq<SchemaError> =
-        match schema with
-        | JsonStringSchema.Const value -> validateInstanceIsValue instance value ctx
-        | JsonStringSchema.Enum values -> validateInstanceInValues instance values ctx
-        | JsonStringSchema.Unvalidated -> Seq.empty
+        let bind (f : 'a -> JsonContextReader<'b>) (reader : JsonContextReader<'a>) : JsonContextReader<'b> =
+            JsonContextReader <| fun ctx ->
+                let x = run ctx reader
+                run ctx (f x)
 
-    let private evaluateReference (JsonReference reference) (ctx : JsonContext) : JsonElementSchema =
-        match reference with
-        | "#"   -> ctx.SchemaRoot
-        | x     -> raise (NotImplementedException ("Reference is not supported: " + x))
+        let retn x = JsonContextReader <| fun _ -> x
 
-    let private getPropertySchema (propertySchema : JsonPropertySchema) (ctx : JsonContext) : JsonElementSchema =
-        match propertySchema with
-        | Inline (_, schema) -> schema
-        | Reference reference -> evaluateReference reference ctx
+        let map (f : 'a -> 'b) (reader : JsonContextReader<'a>) : JsonContextReader<'b> = 
+            JsonContextReader <| fun ctx ->
+                let x = run ctx reader
+                f x
 
-    let private validateRequiredProperties (objectSchema : JsonObjectSchema) (objectInstance : JProperty list) (ctx : JsonContext) : seq<SchemaError> =
-        let instancePropertyNames =
-            objectInstance
-            |> List.map (fun p -> p.Name)
-            |> Set
-        Set.difference objectSchema.Required instancePropertyNames
-        |> Seq.map (fun missingRequiredPropertyName ->
-            SchemaError.Required {
-                Path = ctx.CurrentPath.Render()
-                RequiredPropertyName = missingRequiredPropertyName })
+        let local (f : JsonContext -> JsonContext) (JsonContextReader read) : JsonContextReader<'a> =
+            JsonContextReader (f >> read)
 
-    let validateAdditionalProperties (objectSchema : JsonObjectSchema) (objectInstance : JProperty list) (ctx : JsonContext) : seq<SchemaError> =
-        if objectSchema.AdditionalProperties
-        then Seq.empty
-        else
-            let schemaPropertyNames =
-                objectSchema.Properties
-                |> List.map (fun p -> p.Name)
-                |> Set
-            let instancePropertyNames =
-                objectInstance
-                |> List.map (fun p -> p.Name)
-                |> Set
-            Set.difference instancePropertyNames schemaPropertyNames
-            |> Seq.map (fun additionalPropertyName ->
-                SchemaError.Additional { 
+        let rec concat (readers : seq<JsonContextReader<'a>>) : JsonContextReader<seq<'a>> =
+            if readers |> Seq.isEmpty
+            then retn Seq.empty
+            else
+                readers |> Seq.head |> bind (fun x ->
+                readers |> Seq.tail |> concat |> map (fun xs -> Seq.concat [Seq.singleton x; xs]))
+
+        let concatSchemaErrors (errorReaders : seq<JsonContextReader<seq<SchemaError>>>) =
+            errorReaders
+            |> concat
+            |> map Seq.concat
+
+    let private validateMany
+        (validateElement : JsonElementSchema -> JToken -> JsonContextReader<seq<SchemaError>>)
+        (schemas : JsonElementSchema seq)
+        (instance : JToken) =
+            schemas
+            |> Seq.map (fun s -> validateElement s instance)
+            |> JsonContextReader.concatSchemaErrors
+
+    let private reportTypeMismatch
+        (schema : JsonElementSchema)
+        (instance : JToken) =
+            JsonContextReader <| fun ctx -> seq {
+                SchemaError.Type {
                     Path = ctx.CurrentPath.Render()
-                    AdditionalPropertyName = additionalPropertyName })
+                    ExpectedTypes = Set([schema.Primitive])
+                    ActualType = instance.Type |> JTokenType.toPrimitive } }
 
-    let rec private validateProperty (schemas : JsonElementSchema list) (instance : JProperty) (ctx : JsonContext) : seq<SchemaError> =
-        schemas
-        |> List.map (fun s -> elementMatchesSchema s instance.Value ctx)
-        |> Seq.concat
+    module private Strings =
 
-    and private objectMatchesSchema (objectSchema : JsonObjectSchema) (objectInstance : JProperty list) (ctx : JsonContext) : seq<SchemaError> = seq {
-        let schemaPropertiesByName =
-            objectSchema.Properties
-            |> List.toMap (fun p -> p.Name)
+        let private validateInstanceIsValue (value : 'a) (instance : 'a) =
+            JsonContextReader <| fun ctx -> seq {
+                if value <> instance
+                then yield SchemaError.Value {
+                    Path = ctx.CurrentPath.Render()
+                    Value = instance.ToString() } }
 
-        let getPropertySchemaByName (propertyInstance : JProperty) : JsonElementSchema option =
-            schemaPropertiesByName
-            |> Map.tryFind (propertyInstance.Name)
-            |> Option.map (fun propertySchema -> getPropertySchema propertySchema ctx)
+        let private validateInstanceInValues (values : Set<'a>) (instance : 'a) =
+            JsonContextReader <| fun ctx -> seq {
+                if values |> Set.contains instance |> not
+                then yield SchemaError.Value {
+                    Path = ctx.CurrentPath.Render()
+                    Value = instance.ToString() } }
 
-        let getPropertySchemasByPattern (propertyInstance : JProperty) : JsonElementSchema list =
-            objectSchema.PatternProperties
-            |> List.filter (fun ((RegularExpression pattern), _) -> Regex(pattern).IsMatch(propertyInstance.Name))
-            |> List.map (fun (_, s) -> getPropertySchema (s |> List.head) ctx) // TODO: List.head...
+        let validateString (schema : JsonStringSchema) (instance : string) =
+            match schema with
+            | JsonStringSchema.Const value -> validateInstanceIsValue value instance
+            | JsonStringSchema.Enum values -> validateInstanceInValues values instance
+            | JsonStringSchema.Unvalidated -> JsonContextReader.retn Seq.empty
 
-        let getPropertySchemas (propertyInstance : JProperty) =
-            List.concat [
-                getPropertySchemaByName propertyInstance |> Option.toList
-                getPropertySchemasByPattern propertyInstance ]
+    module Arrays =
 
-        yield!
-            objectInstance
-            |> List.map (fun p -> (getPropertySchemas p, p))
-            |> List.map (fun (propertySchemas, propertyInstance) ->
-                validateProperty propertySchemas propertyInstance (ctx.PushProperty propertyInstance.Name))
-            |> Seq.concat
+        let validateArray
+            (validateElement : JsonElementSchema -> JToken -> JsonContextReader<seq<SchemaError>>)
+            (arraySchema : JsonArraySchema)
+            (arrayInstance : JToken list) =
+                arrayInstance
+                |> List.map (validateElement arraySchema.Items)
+                |> JsonContextReader.concatSchemaErrors
 
-        yield! validateRequiredProperties objectSchema objectInstance ctx
-        yield! validateAdditionalProperties objectSchema objectInstance ctx }
+    module Objects =
 
-    and private arrayMatchesSchema (arraySchema : JsonArraySchema) (arrayInstance : JToken list) (ctx : JsonContext) : seq<SchemaError> =
-        arrayInstance
-        |> Seq.map (fun itemInstance -> elementMatchesSchema arraySchema.Items itemInstance ctx)
-        |> Seq.concat
+        let private evaluateReference (JsonReference reference) =
+            JsonContextReader <| fun ctx ->
+                match reference with
+                | "#" -> ctx.SchemaRoot
+                | x -> raise (NotImplementedException ("Reference is not supported: " + x))
 
-    and private elementMatchesSchema (schema : JsonElementSchema) (instance : JToken) (ctx : JsonContext) : seq<SchemaError> = seq {
+        let private getPropertySchema (propertySchema : JsonPropertySchema) = 
+            match propertySchema with
+            | Inline (_, schema) -> JsonContextReader.retn schema
+            | Reference reference -> evaluateReference reference
+
+        module Properties =
+
+            let private getPropertySchemaByName
+                (propertySchemas : JsonPropertySchema list)
+                (propertyName : string) =
+                    propertySchemas
+                    |> List.tryFind (fun p -> p.Name = propertyName)
+                    |> Option.map getPropertySchema
+
+            let private getPropertySchemasByPattern
+                (patternProperties : (RegularExpression * JsonPropertySchema list) list)
+                (propertyName : string) =
+                    patternProperties
+                    |> List.filter (fun ((RegularExpression pattern), _) -> Regex(pattern).IsMatch(propertyName))
+                    |> List.map (fun (_, s) -> getPropertySchema (s |> List.head)) // TODO: List.head...
+
+            let private getPropertySchemas
+                (objectSchema : JsonObjectSchema)
+                (propertyName : string) =
+                    List.concat [
+                        getPropertySchemaByName objectSchema.Properties propertyName |> Option.toList
+                        getPropertySchemasByPattern objectSchema.PatternProperties propertyName ]
+                    |> JsonContextReader.concat
+
+            let private validateProperty
+                (validateElement : JsonElementSchema -> JToken -> JsonContextReader<seq<SchemaError>>)
+                (objectSchema : JsonObjectSchema)
+                (propertyInstance : JsonPropertyInstance) =
+                    getPropertySchemas objectSchema propertyInstance.Name
+                    |> JsonContextReader.bind (fun propertySchemas ->
+                        validateMany validateElement propertySchemas propertyInstance.Value)
+
+            let validateProperties
+                (validateElement : JsonElementSchema -> JToken -> JsonContextReader<seq<SchemaError>>)
+                (objectSchema : JsonObjectSchema)
+                (objectInstance : JsonObjectInstance) =
+                    objectInstance.Properties
+                    |> List.map (fun propertyInstance ->
+                        JsonContextReader.local
+                            (fun ctx -> ctx.PushProperty propertyInstance.Name)
+                            (validateProperty validateElement objectSchema propertyInstance))
+                    |> JsonContextReader.concatSchemaErrors
+
+        module private Required =
+
+            let private reportRequiredPropertyMissing (propertyName : string) =
+                JsonContextReader <| fun ctx -> seq {
+                    SchemaError.Required {
+                        Path = ctx.CurrentPath.Render()
+                        RequiredPropertyName = propertyName } }
+
+            let validateRequiredProperties
+                (objectSchema : JsonObjectSchema)
+                (objectInstance : JsonObjectInstance) =
+                    Set.difference objectSchema.Required objectInstance.PropertyNames
+                    |> Seq.map reportRequiredPropertyMissing
+                    |> JsonContextReader.concatSchemaErrors
+
+        module private AdditionalProperties =
+
+            let private reportAdditionalPropertyPresent (propertyName : string) =
+                JsonContextReader <| fun ctx -> seq {
+                    SchemaError.Additional { 
+                        Path = ctx.CurrentPath.Render()
+                        AdditionalPropertyName = propertyName } }
+
+            let validateAdditionalProperties
+                (objectSchema : JsonObjectSchema)
+                (objectInstance : JsonObjectInstance) =
+                    if objectSchema.AdditionalProperties
+                    then JsonContextReader.retn Seq.empty
+                    else
+                        Set.difference objectInstance.PropertyNames objectSchema.PropertyNames
+                        |> Seq.map reportAdditionalPropertyPresent
+                        |> JsonContextReader.concatSchemaErrors
+
+        let validateObject
+            (validateElement : JsonElementSchema -> JToken -> JsonContextReader<seq<SchemaError>>)
+            (objectSchema : JsonObjectSchema)
+            (objectInstance : JsonObjectInstance) =
+                [   Properties.validateProperties validateElement
+                    Required.validateRequiredProperties
+                    AdditionalProperties.validateAdditionalProperties ]
+                |> List.map (fun validate -> validate objectSchema objectInstance)
+                |> JsonContextReader.concat
+                |> JsonContextReader.map Seq.concat
+
+    let rec private validateElement (schema : JsonElementSchema) (instance : JToken) =
         match (schema, matchJToken instance) with
-        | JsonElementSchema.Unvalidated, _                       -> yield! Seq.empty
-        | JsonElementSchema.Null,        MatchedJValueAsNull     -> yield! Seq.empty
-        | JsonElementSchema.Boolean,     MatchedJValueAsBool _   -> yield! Seq.empty
-        | JsonElementSchema.Number,      MatchedJValueAsInt _    -> yield! Seq.empty
-        | JsonElementSchema.String s,    MatchedJValueAsString i -> yield! stringMatchesSchema s i ctx
-        | JsonElementSchema.Array s,     MatchedJArray i         -> yield! arrayMatchesSchema s i ctx
-        | JsonElementSchema.Object s,    MatchedJObject i        -> yield! objectMatchesSchema s i ctx
-        | _,                        _                             -> yield reportTypeMismatch schema instance ctx }
+        | JsonElementSchema.Null, JsonElementInstance.Null -> JsonContextReader.retn Seq.empty
+        | JsonElementSchema.Boolean, JsonElementInstance.Boolean _ -> JsonContextReader.retn Seq.empty
+        | JsonElementSchema.Number, JsonElementInstance.Integer _ -> JsonContextReader.retn Seq.empty
+        | JsonElementSchema.String s, JsonElementInstance.String i -> Strings.validateString s i
+        | JsonElementSchema.Array s, JsonElementInstance.Array i -> Arrays.validateArray validateElement s i
+        | JsonElementSchema.Object s, JsonElementInstance.Object i -> Objects.validateObject validateElement s i
+        | JsonElementSchema.Unvalidated, _ -> JsonContextReader.retn Seq.empty
+        | _, _ -> reportTypeMismatch schema instance
 
     let private deserialize instanceJson =
         tryDeserialize<JToken> instanceJson
@@ -209,7 +282,7 @@ module Validator =
                 SchemaRoot = schema
                 InstanceRoot = instance
                 CurrentPath = JsonPath [] }
-            match elementMatchesSchema schema instance ctx |> Seq.toList with
+            match validateElement schema instance |> JsonContextReader.run ctx |> Seq.toList with
             | [] -> Ok instance
             | list -> Error list
         | Error e -> Error [e]

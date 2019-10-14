@@ -15,11 +15,16 @@ module Dom =
         | Const of string
         | Unvalidated
 
-    type JsonObjectSchema = {
-        Properties : JsonPropertySchema list
-        PatternProperties : (RegularExpression * JsonPropertySchema list) list
-        Required : Set<string>
-        AdditionalProperties : bool }
+    type JsonObjectSchema =
+        {   Properties : JsonPropertySchema list
+            PatternProperties : (RegularExpression * JsonPropertySchema list) list
+            Required : Set<string>
+            AdditionalProperties : bool }
+
+            member this.PropertyNames =
+                this.Properties
+                |> List.map (fun p -> p.Name)
+                |> Set
 
     and JsonPropertySchema =
         | Inline    of (string * JsonElementSchema)

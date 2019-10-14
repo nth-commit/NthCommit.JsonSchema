@@ -2,7 +2,6 @@
 
 module JsonHelper =
 
-    open System
     open Newtonsoft.Json
     open Newtonsoft.Json.Linq
 
@@ -10,30 +9,44 @@ module JsonHelper =
         try JsonConvert.DeserializeObject<'a>(json) |> Ok
         with | :? JsonException -> Error ()
 
-    type MatchedJToken =
-        | MatchedJValueAsNull
-        | MatchedJValueAsBool   of bool
-        | MatchedJValueAsInt    of int
-        | MatchedJValueAsString of string
-        | MatchedJArray         of JToken list
-        | MatchedJObject        of JProperty list
+    type JsonPropertyInstance = {
+        Name : string
+        Value : JToken }
+
+    type JsonObjectInstance =
+        | JsonObjectInstance of JProperty list
+
+        member this.Properties =
+            let (JsonObjectInstance properties) = this
+            properties
+            |> List.map (fun p -> {
+                Name = p.Name
+                Value = p.Value })
+
+        member this.PropertyNames =
+            this.Properties
+            |> List.map (fun p -> p.Name)
+            |> Set
+
+    [<RequireQualifiedAccess>]
+    type JsonElementInstance =
+        | Null
+        | Boolean of bool
+        | Integer of int
+        | String of string
+        | Array of JToken list
+        | Object of JsonObjectInstance
         | Unhandled
 
     let matchJToken (jt : JToken) =
         match jt.Type with
-        | JTokenType.Null       -> MatchedJValueAsNull
-        | JTokenType.Boolean    -> MatchedJValueAsBool true
-        | JTokenType.Integer    -> MatchedJValueAsInt 0
-        | JTokenType.String     -> MatchedJValueAsString (jt.Value<string>())
-        | JTokenType.Array      -> (jt :?> JArray).AsJEnumerable() |> Seq.toList |> MatchedJArray
-        | JTokenType.Object     -> (jt :?> JObject).Properties() |> Seq.toList |> MatchedJObject
-        | _ ->
-            Unhandled
-
-    let unmatchJToken = function
-        | MatchedJObject _ -> JTokenType.Object
-        | MatchedJValueAsString _ -> JTokenType.String
-        | _ -> raise (Exception "Unrecognized token")
+        | JTokenType.Null -> JsonElementInstance.Null
+        | JTokenType.Boolean -> JsonElementInstance.Boolean true
+        | JTokenType.Integer -> JsonElementInstance.Integer 0
+        | JTokenType.String -> JsonElementInstance.String (jt.Value<string>())
+        | JTokenType.Array -> (jt :?> JArray).AsJEnumerable() |> Seq.toList |> JsonElementInstance.Array
+        | JTokenType.Object -> (jt :?> JObject).Properties() |> Seq.toList |> JsonObjectInstance |> JsonElementInstance.Object
+        | _ -> JsonElementInstance.Unhandled
 
 [<RequireQualifiedAccess>]
 type JsonPrimitive =

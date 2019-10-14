@@ -9,7 +9,6 @@ open NthCommit.JsonSchema.Validator
 [<RequireQualifiedAccess>]
 type ParserError =
     | Schema of SchemaError
-    | Semantic
 
 type UnhandledJTokenException(token : JToken) =
     inherit Exception(sprintf "Unexpected token: %s" token.Path)
@@ -25,9 +24,9 @@ module Parser =
     let private raiseUnhandledValue value =
         raise (UnhandledValueException value)
 
-    module Strings =
+    module private Strings =
 
-        module Option =
+        module private Option =
 
             let bindOr (f : unit -> 'a option) x =
                 match x with
@@ -57,7 +56,7 @@ module Parser =
             |> Option.defaultValue JsonStringSchema.Unvalidated
             |> JsonElementSchema.String
 
-    module Arrays =
+    module private Arrays =
 
         let private parseItems parseSchemaToken (propertiesByName : Map<string, JProperty>) =
             propertiesByName
@@ -69,7 +68,7 @@ module Parser =
             JsonElementSchema.Array <| {
                 Items = parseItems parseSchemaToken propertiesByName }
 
-    module Objects =
+    module private Objects =
 
         let private parseSchemaProperty parseSchemaToken (property : JProperty) : JsonPropertySchema =
             match property.Name with

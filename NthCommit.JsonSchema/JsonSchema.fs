@@ -74,7 +74,6 @@ module JsonSchema =
 
         let fromParserError = function
             | ParserError.Schema schemaError    -> schemaNotConformingToStandard schemaError
-            | _ -> raise (Exception ("Unexpected error"))
 
         let private SCHEMA_ERROR_IN_INSTANCE = "Error validating instance"
 
