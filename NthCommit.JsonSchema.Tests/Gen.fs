@@ -243,11 +243,8 @@ module Schema =
             jsonObjectInlineProperty jsonElement ]
 
     let rec jsonObject (degree, depth) = gen {
-        let nextDepth = Range.decrement depth
-        let jsonElement' = jsonElement (degree, nextDepth)
-
         let! properties =
-            jsonObjectProperty jsonElement'
+            jsonObjectProperty (jsonElement (degree, depth))
             |> listDistinctBy (fun p -> p.Name) degree
 
         let! requiredProperties =
@@ -264,11 +261,21 @@ module Schema =
             Required = requiredProperties
             AdditionalProperties = additionalProperties } }
 
-    and jsonElement (degree, depth) : Gen<JsonElementSchema> = Gen.choice [
-        jsonNull
-        jsonNumber
-        jsonString
-        jsonObject (degree, depth) ]
+    and jsonArray (degree, depth) =
+        jsonElement (degree, depth)
+        |> Gen.map (fun schema -> JsonElementSchema.Array { Items = schema })
+
+    and jsonElement (degree, depth) : Gen<JsonElementSchema> =
+        Gen.sized <| fun size ->
+            let maxDepth = Range.upperBound size depth
+            seq {
+                jsonNull
+                jsonNumber
+                jsonString
+                if maxDepth > 0 then
+                    jsonArray (degree, Range.decrement depth)
+                    jsonObject (degree, Range.decrement depth) }
+            |> Gen.choice
 
     let jsonElementOfType (degree, depth) primitive =
         jsonElement (degree, depth)

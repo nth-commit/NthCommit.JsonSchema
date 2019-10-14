@@ -182,6 +182,11 @@ module Validator =
         yield! validateRequiredProperties objectSchema objectInstance ctx
         yield! validateAdditionalProperties objectSchema objectInstance ctx }
 
+    and private arrayMatchesSchema (arraySchema : JsonArraySchema) (arrayInstance : JToken list) (ctx : JsonContext) : seq<SchemaError> =
+        arrayInstance
+        |> Seq.map (fun itemInstance -> elementMatchesSchema arraySchema.Items itemInstance ctx)
+        |> Seq.concat
+
     and private elementMatchesSchema (schema : JsonElementSchema) (instance : JToken) (ctx : JsonContext) : seq<SchemaError> = seq {
         match (schema, matchJToken instance) with
         | JsonElementSchema.Unvalidated, _                       -> yield! Seq.empty
@@ -189,7 +194,7 @@ module Validator =
         | JsonElementSchema.Boolean,     MatchedJValueAsBool _   -> yield! Seq.empty
         | JsonElementSchema.Number,      MatchedJValueAsInt _    -> yield! Seq.empty
         | JsonElementSchema.String s,    MatchedJValueAsString i -> yield! stringMatchesSchema s i ctx
-        | JsonElementSchema.Array _,     MatchedJArray _         -> yield! Seq.empty
+        | JsonElementSchema.Array s,     MatchedJArray i         -> yield! arrayMatchesSchema s i ctx
         | JsonElementSchema.Object s,    MatchedJObject i        -> yield! objectMatchesSchema s i ctx
         | _,                        _                             -> yield reportTypeMismatch schema instance ctx }
 

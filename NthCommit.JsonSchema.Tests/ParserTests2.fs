@@ -52,14 +52,19 @@ module JsonElementSchema =
 
         yield JProperty("additionalProperties", objectSchema.AdditionalProperties |> JValue) }
 
+    and private mapArrayToJProperties (arraySchema : JsonArraySchema) = seq {
+        yield JProperty("type", "array")
+        yield JProperty("items", mapToJToken arraySchema.Items) }
+
     and private mapToJToken (schema : JsonElementSchema) : JToken =
         match schema with
         | JsonElementSchema.Null _ -> JProperty("type", "null") |> Seq.singleton
         | JsonElementSchema.Boolean _ -> JProperty("type", "boolean") |> Seq.singleton
         | JsonElementSchema.Number _ -> JProperty("type", "number") |> Seq.singleton
         | JsonElementSchema.String stringSchema -> mapStringToJProperties stringSchema
+        | JsonElementSchema.Array arraySchema -> mapArrayToJProperties arraySchema
         | JsonElementSchema.Object objectSchema -> mapObjectToJProperties objectSchema
-        | _ -> raise (Exception ("Unhandled"))
+        | JsonElementSchema.Unvalidated _ -> Seq.empty
         |> JObject :> JToken
 
     let serialize schema = mapToJToken schema |> JsonConvert.SerializeObject

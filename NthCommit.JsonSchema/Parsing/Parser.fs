@@ -57,6 +57,18 @@ module Parser =
             |> Option.defaultValue JsonStringSchema.Unvalidated
             |> JsonElementSchema.String
 
+    module Arrays =
+
+        let private parseItems parseSchemaToken (propertiesByName : Map<string, JProperty>) =
+            propertiesByName
+            |> Map.tryFind "items"
+            |> Option.map (fun items -> parseSchemaToken items.Value)
+            |> Option.defaultValue JsonElementSchema.Unvalidated
+
+        let parseArray parseSchemaToken (propertiesByName : Map<string, JProperty>) =
+            JsonElementSchema.Array <| {
+                Items = parseItems parseSchemaToken propertiesByName }
+
     module Objects =
 
         let private parseSchemaProperty parseSchemaToken (property : JProperty) : JsonPropertySchema =
@@ -119,14 +131,16 @@ module Parser =
         |> Map.tryFind "type"
         |> Option.map (fun p -> p.Value.Value<string>())
 
-    let private parseSchemaOfType parseSchemaToken (propertiesByName : Map<string, JProperty>) = function
-        | "null" -> JsonElementSchema.Null
-        | "boolean" -> JsonElementSchema.Boolean
-        | "number" -> JsonElementSchema.Number
-        | "string" -> Strings.parseString propertiesByName
-        | "array" -> JsonElementSchema.Array { Items = JsonElementSchema.Unvalidated }
-        | "object" -> Objects.parseObject parseSchemaToken propertiesByName
-        | x -> raiseUnhandledValue x
+    let private parseSchemaOfType
+        (parseSchemaToken : JToken -> JsonElementSchema)
+        (propertiesByName : Map<string, JProperty>) = function
+            | "null" -> JsonElementSchema.Null
+            | "boolean" -> JsonElementSchema.Boolean
+            | "number" -> JsonElementSchema.Number
+            | "string" -> Strings.parseString propertiesByName
+            | "array" -> Arrays.parseArray parseSchemaToken propertiesByName
+            | "object" -> Objects.parseObject parseSchemaToken propertiesByName
+            | x -> raiseUnhandledValue x
 
     let private parseSchema parseSchemaToken (propertiesByName : Map<string, JProperty>) =
         match tryGetTypeProperty propertiesByName with

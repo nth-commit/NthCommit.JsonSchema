@@ -92,6 +92,9 @@ module Gen =
 
             and private runMutatorForNestedElements (mutator : JsonElementSchema -> seq<Gen<JsonElementSchema>>) element =
                 match element with
+                | JsonElementSchema.Array arraySchema ->
+                    mutator arraySchema.Items
+                    |> Seq.map (Gen.map (fun items -> JsonElementSchema.Array { Items = items }))
                 | JsonElementSchema.Object objectSchema ->
                     runMutatorForObject mutator objectSchema
                     |> Seq.map (Gen.map (JsonElementSchema.Object))
@@ -104,9 +107,11 @@ module Gen =
                     yield! runMutatorForNestedElements mutator element }
 
             let mutateElement (mutator : JsonElementSchema -> seq<Gen<JsonElementSchema>>) (element : JsonElementSchema) = gen {
-                let mutations = runMutatorForElement mutator element
-                let! mutationGenerator = Gen.item mutations |> Gen.noShrink
-                return! mutationGenerator |> Gen.noShrink }
+                let mutationGenerators = runMutatorForElement mutator element
+                let! mutationGenerator = Gen.item mutationGenerators |> Gen.noShrink
+                let! mutation = mutationGenerator |> Gen.noShrink
+                if element = mutation then raise (Exception("Mutation failed"))
+                return mutation }
 
             let mutateString (mutator : JsonStringSchema -> seq<Gen<JsonElementSchema>>) (element : JsonElementSchema) =
                 let mutator' = function
@@ -119,6 +124,20 @@ module Gen =
                     | JsonElementSchema.Object objectSchema -> mutator objectSchema
                     | _ -> Seq.empty
                 mutateElement mutator' element
+
+            let tryMutateElement (mutator : JsonElementSchema -> seq<Gen<JsonElementSchema>>) (element : JsonElementSchema) = gen {
+                let mutations = runMutatorForElement mutator element
+                if mutations |> Seq.isEmpty
+                then return None
+                else
+                    let! mutationGenerator = Gen.item mutations |> Gen.noShrink
+                    return! mutationGenerator |> Gen.map Some |> Gen.noShrink }
+
+            let tryMutateString (mutator : JsonStringSchema -> seq<Gen<JsonElementSchema>>) (element : JsonElementSchema) =
+                let mutator' = function
+                    | JsonElementSchema.String stringSchema -> mutator stringSchema
+                    | _ -> Seq.empty
+                tryMutateElement mutator' element
 
     module Instance =
 
@@ -169,13 +188,18 @@ module Gen =
                 |> concat
             return JObject(properties) :> JToken }
 
+        let private jsonArray (json : JsonElementSchema -> Gen<JToken>) (arraySchema : JsonArraySchema) : Gen<JToken> =
+            json arraySchema.Items
+            |> Gen.list (Range.exponential 1 10) // TODO: Use the schema property minItems, but for now always generate at least one element
+            |> Gen.map (fun items -> JArray(items) :> JToken)
+
         let rec private jsonElement (schema : JsonElementSchema) : Gen<JToken> =
             match schema with
             | JsonElementSchema.Null -> createJValue null |> Gen.constant
             | JsonElementSchema.Boolean -> Gen.bool |> Gen.map createJValue
             | JsonElementSchema.Number -> jsonNumber
             | JsonElementSchema.String stringSchema -> jsonString stringSchema
-            | JsonElementSchema.Array _ -> JArray([]) :> JToken |> Gen.constant
+            | JsonElementSchema.Array arraySchema -> jsonArray jsonElement arraySchema
             | JsonElementSchema.Object objectSchema -> jsonObject jsonElement objectSchema
             | JsonElementSchema.Unvalidated -> JObject.FromObject({||}) :> JToken |> Gen.constant
 
