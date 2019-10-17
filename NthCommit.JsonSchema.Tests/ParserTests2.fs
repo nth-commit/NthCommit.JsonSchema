@@ -1,12 +1,11 @@
 ﻿module ParserTests2
 
-open System
 open Xunit
 open Swensen.Unquote
 open Newtonsoft.Json
 open Newtonsoft.Json.Linq
 open NthCommit.JsonSchema.Dom
-open NthCommit.JsonSchema.Parser
+open NthCommit.JsonSchema.Parsing
 open Hedgehog
 
 module JsonElementSchema =
@@ -70,7 +69,7 @@ module JsonElementSchema =
     let serialize schema = mapToJToken schema |> JsonConvert.SerializeObject
 
 [<Fact>]
-let ``deserialization does not lose entropy`` () =
+let ``entire schema model can be parsed`` () =
     Property.check <| property {
         let! schema = Gen.Schema.Defaults.jsonElement
         let roundTrippedSchema = schema |> JsonElementSchema.serialize |> parse

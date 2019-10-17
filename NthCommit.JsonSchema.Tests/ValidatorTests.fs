@@ -4,10 +4,10 @@ open System
 open Hedgehog
 open Swensen.Unquote
 open Xunit
-open NthCommit.JsonSchema
 open NthCommit.JsonSchema.Dom
 open Newtonsoft.Json.Linq
 open FSharpx.Collections
+open NthCommit.JsonSchema.Validation
 
 module JsonElementSchema =
 
@@ -209,7 +209,7 @@ let allPropertiesAreRequired (objectSchema : JsonObjectSchema) =
     { objectSchema with Required = objectSchema.Properties |> List.map (fun p -> p.Name) |> Set }
 
 let validate schema instance =
-    match Validator.validate schema instance with
+    match validate schema instance with
     | Ok _ -> []
     | Error errors -> errors
 

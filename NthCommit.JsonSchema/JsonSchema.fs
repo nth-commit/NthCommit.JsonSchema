@@ -1,6 +1,8 @@
 ﻿namespace NthCommit.JsonSchema
 
 open System
+open NthCommit.JsonSchema.Validation
+open NthCommit.JsonSchema.Parsing
 
 type ValidationFailureTarget =
     | Schema    = 1

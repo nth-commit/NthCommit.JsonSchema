@@ -1,14 +1,15 @@
 ﻿module ParserTests
 
+open System
 open Hedgehog
 open Xunit
 open Swensen.Unquote
 open NthCommit.JsonSchema
 open NthCommit.JsonSchema.Dom
-open NthCommit.JsonSchema.Parser
+open NthCommit.JsonSchema.Parsing
+open NthCommit.JsonSchema.Validation
 open Newtonsoft.Json
 open Newtonsoft.Json.Linq
-open System
 
 let raiseArrogantException () =
     raise (Exception ("No way will this fail"))

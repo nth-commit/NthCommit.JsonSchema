@@ -8,7 +8,15 @@
   <ItemGroup>
     <Compile Include="JsonHelper.fs" />
     <Compile Include="Dom.fs" />
+    <Compile Include="Validation\Errors.fs" />
+    <Compile Include="Validation\JsonContext.fs" />
+    <Compile Include="Validation\Strings.fs" />
+    <Compile Include="Validation\Arrays.fs" />
+    <Compile Include="Validation\Objects.fs" />
     <Compile Include="Validation\Validator.fs" />
+    <Compile Include="Parsing\Strings.fs" />
+    <Compile Include="Parsing\Arrays.fs" />
+    <Compile Include="Parsing\Objects.fs" />
     <Compile Include="Parsing\Parser.fs" />
     <Compile Include="JsonSchema.fs" />
   </ItemGroup>

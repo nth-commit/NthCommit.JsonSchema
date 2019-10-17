@@ -1,6 +1,5 @@
 ﻿namespace NthCommit.JsonSchema
 
-open System.Text.RegularExpressions
 open System
 
 module Dom =
