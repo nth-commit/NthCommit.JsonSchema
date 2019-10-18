@@ -1,8 +1,8 @@
 ﻿module JsonElementSchema
 
-open Newtonsoft.Json.Linq
-open NthCommit.JsonSchema.Dom
 open Newtonsoft.Json
+open Newtonsoft.Json.Linq
+open NthCommit.JsonSchema.Domain
 
 let private mapStringToJProperties (stringSchema : JsonStringSchema) = seq {
     yield JProperty("type", "string")

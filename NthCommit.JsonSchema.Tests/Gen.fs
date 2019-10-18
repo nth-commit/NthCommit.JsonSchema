@@ -3,8 +3,7 @@
 open Hedgehog
 open Newtonsoft.Json
 open Newtonsoft.Json.Linq
-open NthCommit.JsonSchema
-open System
+open NthCommit.JsonSchema.Domain
 
 let rec private listDistinctByInternal
     (projection : 'a -> 'b)
@@ -193,8 +192,6 @@ let notInBy source projection generator =
         |> not)
 
 module Schema =
-
-    open NthCommit.JsonSchema.Dom
 
     module private Range =
 

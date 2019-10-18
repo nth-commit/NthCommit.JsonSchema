@@ -1,8 +1,8 @@
 ﻿namespace NthCommit.JsonSchema.Validation
 
 open System
-open Newtonsoft.Json.Linq
-open NthCommit.JsonSchema.Dom
+open NthCommit.JsonSchema.Domain
+open NthCommit.JsonSchema.Driver
 
 type JsonPathComponent =
     | PropertyAccess of string
@@ -32,7 +32,7 @@ type JsonPath =
 
 type JsonContext =
     {   SchemaRoot : JsonElementSchema
-        InstanceRoot : JToken
+        InstanceRoot : JsonElementInstance
         CurrentPath : JsonPath }
         member this.PushProperty property =
             { this with CurrentPath = this.CurrentPath.Push (PropertyAccess property) }

@@ -1,14 +1,14 @@
 ﻿namespace NthCommit.JsonSchema.Validation
 
-open Newtonsoft.Json.Linq
-open NthCommit.JsonSchema.Dom
+open NthCommit.JsonSchema.Domain
+open NthCommit.JsonSchema.Driver
 
 module Arrays =
 
     let validate
-        (validateElement : JsonElementSchema -> JToken -> JsonContextReader<seq<SchemaError>>)
+        (validateElement : JsonElementSchema -> JsonDriverElement -> JsonContextReader<seq<SchemaError>>)
         (arraySchema : JsonArraySchema)
-        (arrayInstance : JToken list) =
+        (arrayInstance : JsonDriverElement list) =
             arrayInstance
             |> List.map (validateElement arraySchema.Items)
             |> JsonContextReader.concatSchemaErrors

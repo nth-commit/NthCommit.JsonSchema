@@ -1,13 +1,11 @@
 ﻿namespace NthCommit.JsonSchema.Parsing
 
-open Newtonsoft.Json.Linq
-open NthCommit.JsonSchema.Dom
-open NthCommit.JsonSchema.JsonHelper
+open NthCommit.JsonSchema.Domain
+open NthCommit.JsonSchema.Driver
 
 module Strings =
 
     module private Option =
-
         let bindOr (f : unit -> 'a option) x =
             match x with
             | Some x' -> Some x'
@@ -16,22 +14,23 @@ module Strings =
                 | Some x' -> Some x'
                 | None -> None
 
-    let tryParseEnum (propertiesByName : Map<string, JsonPropertyInstance>) =
-        propertiesByName |> Map.tryFind "enum"
+    let tryParseEnum (objectInstance : JsonObjectInstance) =
+        objectInstance.TryFindProperty "enum"
         |> Option.map (fun enumProperty ->
-            (enumProperty.Value :?> JArray)
-            |> Seq.map (fun enumValueToken -> enumValueToken.Value<string>())
-            |> Set
-            |> JsonStringSchema.Enum) : Option<JsonStringSchema>
+            enumProperty.Value
+            |> JsonDriverElement.getArray
+            |> List.map JsonDriverElement.getString
+            |> (Set >> JsonStringSchema.Enum)) : Option<JsonStringSchema>
 
-    let tryParseConst (propertiesByName : Map<string, JsonPropertyInstance>) =
-        propertiesByName |> Map.tryFind "const"
+    let tryParseConst (objectInstance : JsonObjectInstance) =
+        objectInstance.TryFindProperty "const"
         |> Option.map (fun constProperty ->
-            constProperty.Value.Value<string>()
+            constProperty.Value
+            |> JsonDriverElement.getString
             |> JsonStringSchema.Const) : Option<JsonStringSchema>
 
-    let parse (propertiesByName : Map<string, JsonPropertyInstance>) =
-        tryParseEnum propertiesByName
-        |> Option.bindOr (fun _ -> tryParseConst propertiesByName)
+    let parse (objectInstance : JsonObjectInstance) =
+        tryParseEnum objectInstance
+        |> Option.bindOr (fun _ -> tryParseConst objectInstance)
         |> Option.defaultValue JsonStringSchema.Unvalidated
         |> JsonElementSchema.String

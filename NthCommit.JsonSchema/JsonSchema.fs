@@ -1,9 +1,10 @@
 ﻿namespace NthCommit.JsonSchema
 
 open System
+open NthCommit.JsonSchema.Domain
 open NthCommit.JsonSchema.Validation
 open NthCommit.JsonSchema.Parsing
-open JsonHelper
+open NthCommit.JsonSchema.Driver
 
 type ValidationFailureTarget =
     | Schema    = 1
@@ -29,7 +30,6 @@ module JsonSchema =
             | Error error -> error
 
     module private ValidationFailure =
-
 
         let private resolveSchemaErrorPath = function
             | SchemaError.Json e -> e.Path

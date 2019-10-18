@@ -1,12 +1,12 @@
 ﻿module ValidatorTests
 
 open System
-open Hedgehog
-open Swensen.Unquote
 open Xunit
-open NthCommit.JsonSchema.Dom
-open Newtonsoft.Json.Linq
+open Hedgehog
 open FSharpx.Collections
+open Swensen.Unquote
+open Newtonsoft.Json.Linq
+open NthCommit.JsonSchema.Domain
 open NthCommit.JsonSchema.Validation
 
 module Gen =

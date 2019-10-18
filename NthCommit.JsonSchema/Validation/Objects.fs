@@ -2,9 +2,8 @@
 
 open System
 open System.Text.RegularExpressions
-open Newtonsoft.Json.Linq
-open NthCommit.JsonSchema.Dom
-open NthCommit.JsonSchema.JsonHelper
+open NthCommit.JsonSchema.Domain
+open NthCommit.JsonSchema.Driver
 
 module Objects =
 
@@ -20,9 +19,9 @@ module Objects =
         | Reference reference -> evaluateReference reference
 
     let private validateMany
-        (validateElement : JsonElementSchema -> JToken -> JsonContextReader<seq<SchemaError>>)
+        (validateElement : JsonElementSchema -> JsonDriverElement -> JsonContextReader<seq<SchemaError>>)
         (schemas : JsonElementSchema seq)
-        (instance : JToken) =
+        (instance : JsonDriverElement) =
             schemas
             |> Seq.map (fun s -> validateElement s instance)
             |> JsonContextReader.concatSchemaErrors
@@ -52,7 +51,7 @@ module Objects =
                 |> JsonContextReader.concat
 
         let private validateProperty
-            (validateElement : JsonElementSchema -> JToken -> JsonContextReader<seq<SchemaError>>)
+            (validateElement : JsonElementSchema -> JsonDriverElement -> JsonContextReader<seq<SchemaError>>)
             (objectSchema : JsonObjectSchema)
             (propertyInstance : JsonPropertyInstance) =
                 getPropertySchemas objectSchema propertyInstance.Name
@@ -60,7 +59,7 @@ module Objects =
                     validateMany validateElement propertySchemas propertyInstance.Value)
 
         let validateProperties
-            (validateElement : JsonElementSchema -> JToken -> JsonContextReader<seq<SchemaError>>)
+            (validateElement : JsonElementSchema -> JsonDriverElement -> JsonContextReader<seq<SchemaError>>)
             (objectSchema : JsonObjectSchema)
             (objectInstance : JsonObjectInstance) =
                 objectInstance.Properties
@@ -104,7 +103,7 @@ module Objects =
                     |> JsonContextReader.concatSchemaErrors
 
     let validate
-        (validateElement : JsonElementSchema -> JToken -> JsonContextReader<seq<SchemaError>>)
+        (validateElement : JsonElementSchema -> JsonDriverElement -> JsonContextReader<seq<SchemaError>>)
         (objectSchema : JsonObjectSchema)
         (objectInstance : JsonObjectInstance) =
             [   Properties.validateProperties validateElement

@@ -1,6 +1,6 @@
 ﻿namespace NthCommit.JsonSchema.Validation
 
-open NthCommit.JsonSchema.Dom
+open NthCommit.JsonSchema.Domain
 
 module Strings =
 

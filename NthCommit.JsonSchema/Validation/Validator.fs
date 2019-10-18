@@ -1,34 +1,22 @@
 ﻿namespace NthCommit.JsonSchema.Validation
 
-open System
-open Newtonsoft.Json.Linq
-open NthCommit.JsonSchema
-open NthCommit.JsonSchema.Dom
-open NthCommit.JsonSchema.JsonHelper
+open NthCommit.JsonSchema.Domain
+open NthCommit.JsonSchema.Driver
 
 [<AutoOpen>]
 module Validator =
 
-    let private toPrimitive = function
-        | JTokenType.Null       -> JsonPrimitive.Null
-        | JTokenType.Boolean    -> JsonPrimitive.Boolean
-        | JTokenType.Integer    -> JsonPrimitive.Number
-        | JTokenType.String     -> JsonPrimitive.String
-        | JTokenType.Array      -> JsonPrimitive.Array
-        | JTokenType.Object     -> JsonPrimitive.Object
-        | x                     -> raise (Exception("Unhandled JTokenType: " + x.ToString()))
-
     let private reportTypeMismatch
         (schema : JsonElementSchema)
-        (instance : JToken) =
+        (instance : JsonDriverElement) =
             JsonContextReader <| fun ctx -> seq {
                 SchemaError.Type {
                     Path = ctx.CurrentPath.Render()
                     ExpectedTypes = Set([schema.Primitive])
-                    ActualType = instance.Type |> toPrimitive } }
+                    ActualType = instance.Primitive } }
 
-    let rec private validateElement (schema : JsonElementSchema) (instance : JToken) =
-        match (schema, matchJToken instance) with
+    let rec private validateElement (schema : JsonElementSchema) (instance : JsonDriverElement) =
+        match (schema, instance.Match()) with
         | JsonElementSchema.Null, JsonElementInstance.Null -> JsonContextReader.retn Seq.empty
         | JsonElementSchema.Boolean, JsonElementInstance.Boolean _ -> JsonContextReader.retn Seq.empty
         | JsonElementSchema.Number, JsonElementInstance.Integer _ -> JsonContextReader.retn Seq.empty
@@ -38,12 +26,13 @@ module Validator =
         | JsonElementSchema.Unvalidated, _ -> JsonContextReader.retn Seq.empty
         | _, _ -> reportTypeMismatch schema instance
 
-    let validate (schema : JsonElementSchema) (instanceJson : string) : Result<JToken, List<SchemaError>> =
-        match tryDeserialize<JToken> instanceJson with
+    let validate (schema : JsonElementSchema) (instanceJson : string) : Result<JsonDriverElement, List<SchemaError>> =
+        let driver : JsonDriver = new NewtonsoftJsonDriver() :> JsonDriver
+        match driver.GetElement(instanceJson) with
         | Ok instance ->
             let ctx = {
                 SchemaRoot = schema
-                InstanceRoot = instance
+                InstanceRoot = instance.Match()
                 CurrentPath = JsonPath [] }
             match validateElement schema instance |> JsonContextReader.run ctx |> Seq.toList with
             | [] -> Ok instance

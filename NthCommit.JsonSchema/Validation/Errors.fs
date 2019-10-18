@@ -1,7 +1,7 @@
 ﻿namespace NthCommit.JsonSchema.Validation
 
-open NthCommit.JsonSchema
-open NthCommit.JsonSchema.JsonHelper
+open NthCommit.JsonSchema.Domain
+open NthCommit.JsonSchema.Driver
 
 type SchemaTypeError = {
     Path            : string

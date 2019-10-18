@@ -1,16 +1,9 @@
 ﻿namespace NthCommit.JsonSchema.Parsing
 
 open System
-open Newtonsoft.Json.Linq
-open NthCommit.JsonSchema.Dom
-open NthCommit.JsonSchema.JsonHelper
+open NthCommit.JsonSchema.Domain
+open NthCommit.JsonSchema.Driver
 open NthCommit.JsonSchema.Validation
-
-type UnhandledJTokenException(token : JToken) =
-    inherit Exception(sprintf "Unexpected token: %s" token.Path)
-
-type UnhandledValueException<'a>(value : 'a) =
-    inherit Exception(sprintf "Unhandled value: %s" (value.ToString()))
 
 [<AutoOpen>]
 module Parser =
@@ -21,44 +14,6 @@ module Parser =
             list
             |> List.map (fun x -> (keyProjection x, x))
             |> Map
-
-    let private raiseUnhandledToken token =
-        raise (UnhandledJTokenException token)
-
-    let private raiseUnhandledValue value =
-        raise (UnhandledValueException value)
-
-    let private keyPropertiesByName (objectInstance : JsonObjectInstance) : Map<string, JsonPropertyInstance> =
-        objectInstance.Properties
-        |> List.toMap (fun p -> p.Name)
-
-    let private tryGetTypeProperty (propertiesByName : Map<string, JsonPropertyInstance>) =
-        propertiesByName
-        |> Map.tryFind "type"
-        |> Option.map (fun p -> p.Value.Value<string>())
-
-    let private parseSchemaOfType
-        (parseSchemaToken : JToken -> JsonElementSchema)
-        (propertiesByName : Map<string, JsonPropertyInstance>) = function
-            | "null" -> JsonElementSchema.Null
-            | "boolean" -> JsonElementSchema.Boolean
-            | "number" -> JsonElementSchema.Number
-            | "string" -> Strings.parse propertiesByName
-            | "array" -> Arrays.parse parseSchemaToken propertiesByName
-            | "object" -> Objects.parse parseSchemaToken propertiesByName
-            | x -> raiseUnhandledValue x
-
-    let private parseSchema parseSchemaToken (propertiesByName : Map<string, JsonPropertyInstance>) =
-        match tryGetTypeProperty propertiesByName with
-        | Some jtype -> parseSchemaOfType parseSchemaToken propertiesByName jtype
-        | None -> JsonElementSchema.Unvalidated
-
-    let rec private parseSchemaToken schemaToken : JsonElementSchema =
-        match matchJToken schemaToken with
-        | JsonElementInstance.Object objectInstance ->
-            let propertiesByName = keyPropertiesByName objectInstance
-            parseSchema parseSchemaToken propertiesByName
-        | _ -> raiseUnhandledToken schemaToken
 
     let private META_SCHEMA = JsonElementSchema.Object {
         Properties = [
@@ -78,7 +33,29 @@ module Parser =
         Required = Set []
         AdditionalProperties = true }
 
+    let private tryGetTypeProperty (objectInstance : JsonObjectInstance) =
+        objectInstance.TryFindProperty "type"
+        |> Option.map (fun p ->
+            p.Value |> JsonDriverElement.getString)
+
+    let private parseSchemaElementOfType
+        (parseSchemaToken : JsonDriverElement -> JsonElementSchema)
+        (objectInstance : JsonObjectInstance) = function
+            | "null" -> JsonElementSchema.Null
+            | "boolean" -> JsonElementSchema.Boolean
+            | "number" -> JsonElementSchema.Number
+            | "string" -> Strings.parse objectInstance
+            | "array" -> Arrays.parse parseSchemaToken objectInstance
+            | "object" -> Objects.parse parseSchemaToken objectInstance
+            | _ -> raise (Exception ("Unexpected token"))
+
+    let rec private parseSchemaElement (element : JsonDriverElement) : JsonElementSchema =
+        let objectInstance = JsonDriverElement.getObject element
+        match tryGetTypeProperty objectInstance with
+        | Some jtype -> parseSchemaElementOfType parseSchemaElement objectInstance jtype
+        | None -> JsonElementSchema.Unvalidated
+
     let parse (schema : string) : Result<JsonElementSchema, List<SchemaError>> =
         match validate META_SCHEMA schema with
-        | Ok schemaToken -> parseSchemaToken schemaToken |> Ok
+        | Ok schemaToken -> parseSchemaElement schemaToken |> Ok
         | Error errors -> errors |> Error

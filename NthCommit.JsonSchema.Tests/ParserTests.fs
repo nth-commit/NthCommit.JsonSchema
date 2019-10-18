@@ -1,15 +1,14 @@
 ﻿module ParserTests
 
 open System
-open Hedgehog
 open Xunit
+open Hedgehog
 open Swensen.Unquote
-open NthCommit.JsonSchema
-open NthCommit.JsonSchema.Dom
-open NthCommit.JsonSchema.Parsing
-open NthCommit.JsonSchema.Validation
 open Newtonsoft.Json
 open Newtonsoft.Json.Linq
+open NthCommit.JsonSchema.Domain
+open NthCommit.JsonSchema.Parsing
+open NthCommit.JsonSchema.Validation
 
 let raiseArrogantException () =
     raise (Exception ("No way will this fail"))
@@ -123,7 +122,7 @@ module Validation =
         Property.check <| property {
             let! schemaToken = Gen.Json.tokenNotOf JTokenType.Object
             let schema = JToken.serialize schemaToken
-            expectSchemaTypeError "#" [JsonPrimitive.Object] (JToken.primitive schemaToken) schema }
+            expectSchemaTypeError "" [JsonPrimitive.Object] (JToken.primitive schemaToken) schema }
 
     [<Fact>]
     let ``reports schema type error when type is not a string`` () =
