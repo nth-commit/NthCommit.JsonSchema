@@ -20,7 +20,7 @@ type JsonPath =
     member this.Render () =
         let (JsonPath components) = this
         match components with
-        | []    -> "#"
+        | []    -> ""
         | _     ->
             components
             |> List.rev

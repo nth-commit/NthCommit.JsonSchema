@@ -1,6 +1,7 @@
 ﻿namespace NthCommit.JsonSchema.Validation
 
 open NthCommit.JsonSchema
+open NthCommit.JsonSchema.JsonHelper
 
 type SchemaTypeError = {
     Path            : string
@@ -21,7 +22,7 @@ type SchemaAdditionError = {
 
 [<RequireQualifiedAccess>]
 type SchemaError =
-    | Json of string
+    | Json of JsonDeserializationError
     | Type of SchemaTypeError
     | Value of SchemaValueError
     | Required of SchemaRequiredError

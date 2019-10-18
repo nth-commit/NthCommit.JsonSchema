@@ -35,4 +35,3 @@ module Strings =
         |> Option.bindOr (fun _ -> tryParseConst propertiesByName)
         |> Option.defaultValue JsonStringSchema.Unvalidated
         |> JsonElementSchema.String
-

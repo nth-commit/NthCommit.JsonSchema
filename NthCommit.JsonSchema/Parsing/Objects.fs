@@ -4,7 +4,7 @@ open Newtonsoft.Json.Linq
 open NthCommit.JsonSchema.Dom
 open NthCommit.JsonSchema.JsonHelper
 
-module private Arrays =
+module Arrays =
 
     let private parseItems
         (parseSchemaToken : JToken -> JsonElementSchema)

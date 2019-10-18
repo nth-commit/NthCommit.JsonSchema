@@ -16,7 +16,7 @@ module Dom =
 
     type JsonObjectSchema =
         {   Properties : JsonPropertySchema list
-            PatternProperties : (RegularExpression * JsonPropertySchema list) list
+            PatternProperties : JsonPatternPropertySchema list
             Required : Set<string>
             AdditionalProperties : bool }
 
@@ -33,6 +33,8 @@ module Dom =
             match this with
             | Inline (name, _)      -> name
             | Reference _           -> "$ref"
+
+    and JsonPatternPropertySchema = RegularExpression * JsonPropertySchema list
 
     and JsonArraySchema = {
         Items : JsonElementSchema }

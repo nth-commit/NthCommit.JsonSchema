@@ -83,39 +83,40 @@ let ``parses schema of given "type"`` () =
         | x         -> <@ x <> x @> // We must have an unhandled primitive
         |> test }
 
-let makeParserError (parserError : ParserError) : Result<JsonElementSchema, ParserError> =
-    Error parserError
-
-let makeSchemaError schemaError =
-    schemaError
-    |> ParserError.Schema
-    |> makeParserError
+let makeSchemaErrors (schemaError : SchemaError) : Result<JsonElementSchema, List<SchemaError>> =
+    Error [schemaError]
 
 let makeSchemaTypeError path expectedTypes actualType =
     { Path = path; ExpectedTypes = Set(expectedTypes); ActualType = actualType }
     |> SchemaError.Type
-    |> makeSchemaError
+    |> makeSchemaErrors
 
 let expectSchemaTypeError path expectedTypes actualType schema =
     test <@ makeSchemaTypeError path expectedTypes actualType = parse schema @>
 
 module Validation =
 
+    module private Result =
+
+        let isErrorAnd predicate (r : Result<_, SchemaError list>) =
+            match r with
+            | Ok _ -> false
+            | Error e -> predicate e
+
+        let isInvalidJson = isErrorAnd (List.exactlyOne >> (function
+            | SchemaError.Json _ -> true
+            | _ -> false))
+
     let makeSchemaValueError path value =
         { Path = path; Value = value }
         |> SchemaError.Value
-        |> makeSchemaError
-
-    let invalidJson =
-        SchemaError.Json ""
-        |> ParserError.Schema
-        |> makeParserError
+        |> makeSchemaErrors
 
     [<Fact>]
     let ``reports invalid json`` () =
         Property.check <| property {
             let! schema = Gen.Json.invalid
-            invalidJson =! parse schema }
+            test <@ parse schema |> Result.isInvalidJson @> }
 
     [<Fact>]
     let ``reports schema error when schema is not a json object`` () =

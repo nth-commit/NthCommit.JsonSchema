@@ -5,9 +5,17 @@ module JsonHelper =
     open Newtonsoft.Json
     open Newtonsoft.Json.Linq
 
-    let tryDeserialize<'a> (json : string) : Result<'a, unit> =
+    type JsonDeserializationError = {
+        LineNumber: int
+        LinePosition: int
+        Path: string }
+
+    let tryDeserialize<'a> (json : string) : Result<'a, JsonDeserializationError> =
         try JsonConvert.DeserializeObject<'a>(json) |> Ok
-        with | :? JsonException -> Error ()
+        with | :? JsonReaderException as ex -> Error {
+            LineNumber = ex.LineNumber
+            LinePosition = ex.LinePosition
+            Path = ex.Path }
 
     type JsonPropertyInstance = {
         Name : string

@@ -9,59 +9,6 @@ open Newtonsoft.Json.Linq
 open FSharpx.Collections
 open NthCommit.JsonSchema.Validation
 
-module JsonElementSchema =
-
-    let rec private mapPropertySchemas (f : JsonElementSchema -> JsonElementSchema) = function
-        | JsonPropertySchema.Inline (name, schema) ->
-            JsonPropertySchema.Inline (name, mapElements f schema)
-        | x -> x
-
-    and private mapObjectSchemas (f : JsonElementSchema -> JsonElementSchema) (x : JsonObjectSchema) =
-        { x with
-            Properties = List.map (mapPropertySchemas f) x.Properties } : JsonObjectSchema
-
-    and private mapArraySchemas (f : JsonElementSchema -> JsonElementSchema) (x : JsonArraySchema) =
-        { x with
-            Items = f x.Items } : JsonArraySchema
-
-    and mapElements (f : JsonElementSchema -> JsonElementSchema) x =
-        match f x with
-        | JsonElementSchema.Object x ->
-            mapObjectSchemas f x |> JsonElementSchema.Object
-        | JsonElementSchema.Array x ->
-            mapArraySchemas f x |> JsonElementSchema.Array
-        | x -> x
-
-    let mapObjects (f : JsonObjectSchema -> JsonObjectSchema) = mapElements (function
-        | JsonElementSchema.Object x -> f x |> JsonElementSchema.Object
-        | x -> x)
-
-    let rec private existsInProperty (predicate : JsonElementSchema -> bool) = function
-        | JsonPropertySchema.Inline (_, schema) -> exists predicate schema
-        | _ -> false
-
-    and private existsInObject (predicate : JsonElementSchema -> bool) (spec : JsonObjectSchema) =
-        List.exists (existsInProperty predicate) spec.Properties
-
-    and private existsInArray (predicate : JsonElementSchema -> bool) (spec : JsonArraySchema) =
-        predicate spec.Items
-
-    and private existsNested (predicate : JsonElementSchema -> bool) = function
-        | JsonElementSchema.Object objectSchema -> existsInObject predicate objectSchema
-        | JsonElementSchema.Array arraySchema -> existsInArray predicate arraySchema
-        | _ -> false
-
-    and exists (predicate : JsonElementSchema -> bool) (element : JsonElementSchema) =
-        predicate element || existsNested predicate element : bool
-
-    let stringExists (predicate : JsonStringSchema -> bool) = exists (function
-        | JsonElementSchema.String objectSchema -> predicate objectSchema
-        | _ -> false)
-
-    let objectExists (predicate : JsonObjectSchema -> bool) = exists (function
-        | JsonElementSchema.Object objectSchema -> predicate objectSchema
-        | _ -> false)
-
 module Gen =
 
     module Schema =

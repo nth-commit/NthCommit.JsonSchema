@@ -38,12 +38,8 @@ module Validator =
         | JsonElementSchema.Unvalidated, _ -> JsonContextReader.retn Seq.empty
         | _, _ -> reportTypeMismatch schema instance
 
-    let private deserialize instanceJson =
-        tryDeserialize<JToken> instanceJson
-        |> Result.mapError (fun _ -> SchemaError.Json "")
-
     let validate (schema : JsonElementSchema) (instanceJson : string) : Result<JToken, List<SchemaError>> =
-        match deserialize instanceJson with
+        match tryDeserialize<JToken> instanceJson with
         | Ok instance ->
             let ctx = {
                 SchemaRoot = schema
@@ -52,4 +48,4 @@ module Validator =
             match validateElement schema instance |> JsonContextReader.run ctx |> Seq.toList with
             | [] -> Ok instance
             | list -> Error list
-        | Error e -> Error [e]
+        | Error e -> Error [SchemaError.Json e]

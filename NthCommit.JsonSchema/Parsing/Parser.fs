@@ -6,10 +6,6 @@ open NthCommit.JsonSchema.Dom
 open NthCommit.JsonSchema.JsonHelper
 open NthCommit.JsonSchema.Validation
 
-[<RequireQualifiedAccess>]
-type ParserError =
-    | Schema of SchemaError
-
 type UnhandledJTokenException(token : JToken) =
     inherit Exception(sprintf "Unexpected token: %s" token.Path)
 
@@ -68,7 +64,8 @@ module Parser =
         Properties = [
             JsonPropertySchema.Inline (
                 "type",
-                JsonElementSchema.String <| JsonStringSchema.Enum (Set(["null"; "boolean"; "number"; "string"; "object"; "array"])))
+                JsonElementSchema.String <|
+                    JsonStringSchema.Enum (Set(["null"; "boolean"; "number"; "string"; "object"; "array"])))
             JsonPropertySchema.Inline (
                 "properties",
                 JsonElementSchema.Object {
@@ -81,7 +78,7 @@ module Parser =
         Required = Set []
         AdditionalProperties = true }
 
-    let parse (schema : string) : Result<JsonElementSchema, ParserError> =
+    let parse (schema : string) : Result<JsonElementSchema, List<SchemaError>> =
         match validate META_SCHEMA schema with
         | Ok schemaToken -> parseSchemaToken schemaToken |> Ok
-        | Error errors -> errors |> List.head |> ParserError.Schema |> Error
+        | Error errors -> errors |> Error
