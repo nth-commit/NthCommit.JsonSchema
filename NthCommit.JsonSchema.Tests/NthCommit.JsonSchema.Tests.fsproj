@@ -18,7 +18,7 @@
 
   <ItemGroup>
     <PackageReference Include="Hedgehog" Version="0.8.3" />
-    <PackageReference Include="Newtonsoft.Json" Version="11.0.1" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.2" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="16.2.0" />
     <PackageReference Include="Unquote" Version="5.0.0" />
     <PackageReference Include="xunit" Version="2.4.0" />
